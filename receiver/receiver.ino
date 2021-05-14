@@ -1,9 +1,11 @@
 #include <mcp_can_uib.h>
 #include <mcp_can_uib_dfs.h>
 #include <SPI.h>
-#include <HIB.h>
-#include <timerConfig.h>
 #include "Terminal.h"
+#include "HIB.h"
+#include "timerConfig.h"
+#include "SO.h"
+
 
 // the cs pin of the version after v1.1 is default to D9
 // v0.9b and v1.0 is default D10
@@ -15,22 +17,54 @@ const int SPI_CS_PIN = 9;
 
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
+SO so;
 
 Terminal term;
 
+const uint32_t ID_PANEL_PULSADO =0x00022449; 
+const uint32_t ID_INCENDIO = 0x00022450; 
+const uint32_t ID_BASCULA = 0x00022451;  
+
+Flag fCANEvent;
+
+const unsigned char maskControl = 0x01;
+
 volatile bool tx_timer_expired;
 
-volatile bool rx_msg_flag;
 volatile uint32_t rx_id;
 volatile uint8_t rx_dlc;
-volatile int rx_sensor;
+volatile char rx_tecla;
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
 /******************************************************************************/
 
 void print_tx_msg(int tx_sensor_to_print);
-void print_rx_msg(uint16_t rx_msg_count_to_print, uint32_t rx_id_to_print, uint8_t rx_dlc_to_print, int rx_sensor_to_print);
+void print_rx_msg();
+
+/******************************************************************************/
+/** TASKS *********************************************************************/
+/******************************************************************************/
+
+void TaskControl(){
+  
+   so.waitFlag(fCANEvent, maskControl);
+   term.print("HOLAA ");
+   so.clearFlag(fCANEvent, maskControl);
+   
+   switch(rx_id){
+      case ID_PANEL_PULSADO:
+        CAN.getRxMsgData((byte*) &rx_tecla);
+        print_rx_msg();
+       
+      break;
+      case ID_INCENDIO:
+      break;
+      case ID_BASCULA: 
+      break;
+  }
+}
+
 
 /******************************************************************************/
 /** Hooks *********************************************************************/
@@ -81,9 +115,18 @@ void MCP2515_ISR()
     CAN.readRxMsg();
     rx_id = CAN.getRxMsgId();
     rx_dlc = CAN.getRxMsgDlc();
-    CAN.getRxMsgData((byte*) &rx_sensor);
-
-    rx_msg_flag = true;
+    so.setFlag(fCANEvent, maskControl);
+    switch(rx_id){
+      case ID_PANEL_PULSADO:
+        CAN.getRxMsgData((char*) &rx_tecla);
+        print_rx_msg();
+       
+      break;
+      case ID_INCENDIO:
+      break;
+      case ID_BASCULA: 
+      break;
+    }
   }
 
   // Restore the AVR Status Register by software
@@ -108,7 +151,7 @@ void setup()
 
   // Clear LCD
   hib.lcdClear();
-
+  
   // Init can bus : baudrate = 500k, loopback mode, enable reception and transmission interrupts
   while (CAN.begin(CAN_500KBPS, MODE_NORMAL, true, false) != CAN_OK) {
     term.println("CAN BUS Shield init fail");
@@ -136,19 +179,11 @@ void loop()
   uint16_t rx_msg_count = 0;
 
   hib.setUpTimer5(TIMER_TICKS_FOR_1s, TIMER_PSCALER_FOR_1s, timer5Hook);
-
-  rx_msg_flag = false;
-
+  fCANEvent= so.defFlag();
+  so.defTask(TaskControl, 2);
   while (true)
   {
-    // RX by interrupt
-    if (rx_msg_flag)
-    {
-      rx_msg_flag = false;
-      rx_msg_count++;
-      // Print rx timestamp, message counter, dlc and value on Terminal
-      print_rx_msg(rx_sensor);
-    }
+      
   }
 }
 
@@ -164,16 +199,33 @@ void loop()
 // DLC: size of rx_sensor
 // SENSOR: rx_sensor
 
-void print_rx_msg(int rx_to_print)
-{
-  char charBuff [8];
-
-  term.println("-- RX -----------------------");
+void print_rx_msg()
+{  
+   
+  term.println("-----RESULTADO-----");
   
+  switch(rx_tecla){
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+          case '6':
+          term.print("Vamos al piso ");
+          term.print(rx_tecla);
+          break;
+          case '#':
+          term.print("Cerrando puertas");
+          break;
+          case '*':
+          term.print("Abriendo puertas");
+          break;
+          case '0':
+          term.print("A L A R M A");
+          break;
+          default:
+          break;
+   }
   
-  term.print("keyValue: ");
-  sprintf(charBuff, "%i",rx_to_print);
-  term.println(charBuff);
-
   term.println("");
 }

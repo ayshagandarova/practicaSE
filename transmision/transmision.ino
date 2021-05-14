@@ -1,8 +1,8 @@
 #include <mcp_can_uib.h>
 #include <mcp_can_uib_dfs.h>
 #include <SPI.h>
-#include "HIB.h"
 #include "Terminal.h"
+#include "HIB.h"
 #include "timerConfig.h"
 #include "SO.h"
 
@@ -10,21 +10,24 @@ const int SPI_CS_PIN = 9;
 
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
+SO so;
 
 Terminal term;
 
 volatile bool tx_timer_expired;
 const unsigned char maskKeyEvent = 0x01;
-volatile uint16_t  keyValue = 0; 
-  // TX consts and vars
-  const uint8_t TX_LED = 0;
-  const uint32_t tx_id = 0x00022449;
-  int tx_sensor = -3276; // int is 2-bytes long in arduino, thus is range in C2 is [-32768, 32767]
+volatile char  keyValue = 0; 
+// TX consts and vars
+const uint32_t id_panel_pulsado = 0x00022449; 
+const uint32_t id_incendio = 0x00022450; 
+const uint32_t id_bascula = 0x00022451;  
 
+/***************************
+  Declaration of semaphores
+***************************/ 
+Sem sCANControl;
 
-
-
-void print_tx_msg(int tx_sensor_to_print);
+void print_consola(char to_print);
 
 void KeyPadHook(uint8_t newKey)
 {
@@ -32,21 +35,55 @@ void KeyPadHook(uint8_t newKey)
 
    // TX by polling based on timer
     
-      keyValue = newKey;
+
+     
+      switch(newKey){
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+          keyValue = 49 + newKey; // el 49 es el valor ASCII de 1, por lo tanto se guarda en
+                                  // KeyValue el valor en char de cada piso
+          term.print(keyValue);
+          break;
+        case 9:
+         keyValue = '*'; // abrir puertas
+         break;
+        case 11:
+         keyValue = '#'; //cerrar puertas
+         break;
+        case 10:
+          keyValue = '0';
+          break;
+         
+        
+      }
       // Check whether or not the TX buffer is available (no Tx still pending)
       // to request transmission of sensor
-      if (CAN.checkPendingTransmission() != CAN_TXPENDING)
-      {
+
+      // Update auxSampled Sensor (shared with TaskState)
+    so.waitSem(sCANControl);
+
+     if (CAN.checkPendingTransmission() != CAN_TXPENDING){
           // en el sizeof le indicamos cuantos bytes queremos leer de la dirección de memoria 
           //y el último párametro es la direccion de la variable de tx_sensor &tx_sensor  
           // (INT8U *) es un casting para nuestro compilador no se lie, 
           //convertimos un puntero a un puntero de 8 bits
-        CAN.sendMsgBufNonBlocking(tx_id, CAN_EXTID, sizeof(int), (INT8U *) &keyValue);
-        //escribe una trama en el buffer (transmisión)
-        print_tx_msg(keyValue);
+          
+        CAN.sendMsgBufNonBlocking(id_panel_pulsado, CAN_EXTID, sizeof(char), (char *) &keyValue);
+        
       }
     
+    so.signalSem(sCANControl);
+    //escribe una trama en el buffer (transmisión)
+    print_consola(keyValue);
+      
+    
 }
+
+
 
 void setup() {
   // Init terminal
@@ -79,15 +116,17 @@ void setup() {
 
 void loop() {
 
+  // Definition and initialization of semaphores
+    sCANControl = so.defSem(1); // intially accesible
     hib.keySetIntDriven(100, KeyPadHook);
-
-    while (true) {
-  }
+       // Definition and initialization of tasks
+    
+    while (true) {}
 }
-void print_tx_msg(int tx_sensor_to_print)
+void print_consola(char to_print)
 {
   char charBuff[20];
-  sprintf(charBuff, "KeyValue: %i     ",tx_sensor_to_print);
+  sprintf(charBuff, "KeyValue: %i     ",to_print);
   hib.lcdSetCursorFirstLine();
   hib.lcdPrint(charBuff);
 }
