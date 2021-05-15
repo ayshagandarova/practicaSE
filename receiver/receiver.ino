@@ -18,7 +18,6 @@ const int SPI_CS_PIN = 9;
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
 SO so;
-
 Terminal term;
 
 const uint32_t ID_PANEL_PULSADO =0x00022449; 
@@ -32,14 +31,12 @@ const unsigned char maskControl = 0x01;
 volatile bool tx_timer_expired;
 
 volatile uint32_t rx_id;
-volatile uint8_t rx_dlc;
 volatile char rx_tecla;
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
 /******************************************************************************/
 
-void print_tx_msg(int tx_sensor_to_print);
 void print_rx_msg();
 
 /******************************************************************************/
@@ -47,22 +44,23 @@ void print_rx_msg();
 /******************************************************************************/
 
 void TaskControl(){
-  
-   so.waitFlag(fCANEvent, maskControl);
-   term.print("HOLAA ");
-   so.clearFlag(fCANEvent, maskControl);
-   
-   switch(rx_id){
-      case ID_PANEL_PULSADO:
-        CAN.getRxMsgData((byte*) &rx_tecla);
-        print_rx_msg();
-       
-      break;
-      case ID_INCENDIO:
-      break;
-      case ID_BASCULA: 
-      break;
-  }
+
+    while(1){
+      
+      so.waitFlag(fCANEvent, maskControl);
+      
+      so.clearFlag(fCANEvent, maskControl);
+     Serial.println("########");
+       switch(rx_id){
+          case ID_PANEL_PULSADO:
+            print_rx_msg();
+          break;
+          case ID_INCENDIO:
+          break;
+          case ID_BASCULA: 
+          break;
+        } 
+    }
 }
 
 
@@ -96,7 +94,14 @@ void timer5Hook()
 // Anyway, just to show how to use the library to check what events have triggered the ISR,
 // in this ISR we check that the ISR has been actually triggered by an RX event.
 
-void MCP2515_ISR()
+
+
+
+/*****************
+  CANISR
+******************/ 
+
+void isrCAN()
 {
   char auxSREG;
 
@@ -104,28 +109,21 @@ void MCP2515_ISR()
   // since the micro does not do it automatically
   auxSREG = SREG;
 
+  if (CAN.rxInterrupt()) {
+    hib.ledToggle(3); // for debugging
 
-  if (CAN.rxInterrupt())
-  {
-    // Function readRxMsg() does the following actions:
-    // (1) Reads received message from RX buffer and places it
-    //     in a software buffer within the CAN object ('within the library')
-    // (2) Clears and releases the RX buffer
-    // (3) Clears the reception interrupt flag placed at the CAN controller
-    CAN.readRxMsg();
     rx_id = CAN.getRxMsgId();
-    rx_dlc = CAN.getRxMsgDlc();
-    so.setFlag(fCANEvent, maskControl);
-    switch(rx_id){
+    Serial.println("*********");
+       Serial.println(rx_id);
+    switch(rx_id) {
       case ID_PANEL_PULSADO:
-        CAN.getRxMsgData((char*) &rx_tecla);
-        print_rx_msg();
        
-      break;
-      case ID_INCENDIO:
-      break;
-      case ID_BASCULA: 
-      break;
+        CAN.getRxMsgData((byte*) &rx_tecla);
+        so.setFlag(fCANEvent, maskControl);
+        break;
+
+      default:
+        break;
     }
   }
 
@@ -144,7 +142,7 @@ void setup()
   // Init terminal
   term.begin(115200);
   term.clear();
-  term.println("Soy Placa 2 imprimo lo que me pasa placa 1 ");
+  Serial.println("Soy Placa 2 imprimo lo que me pasa placa 1 ");
 
   // Init HIB
   hib.begin();
@@ -154,17 +152,19 @@ void setup()
   
   // Init can bus : baudrate = 500k, loopback mode, enable reception and transmission interrupts
   while (CAN.begin(CAN_500KBPS, MODE_NORMAL, true, false) != CAN_OK) {
-    term.println("CAN BUS Shield init fail");
-    term.println(" Init CAN BUS Shield again");
+    Serial.println("CAN BUS Shield init fail");
+    Serial.println(" Init CAN BUS Shield again");
     delay(100);
   }
 
-  term.println("CAN BUS Shield init ok!");
+  
+
+  Serial.println("CAN BUS Shield init ok!");
 
   // Set CAN interrupt handler address in the position of interrupt number 0
   // since the INT output signal of the CAN shield is connected to
   // the Mega 2560 pin num 2, which is associated to that interrupt number.
-  attachInterrupt(0, MCP2515_ISR, FALLING);
+  attachInterrupt(0, isrCAN, FALLING);
 }
 
 
@@ -174,17 +174,16 @@ void setup()
 
 void loop()
 {
-  
+  fCANEvent= so.defFlag();
   // Rx vars
   uint16_t rx_msg_count = 0;
 
   hib.setUpTimer5(TIMER_TICKS_FOR_1s, TIMER_PSCALER_FOR_1s, timer5Hook);
-  fCANEvent= so.defFlag();
+  
   so.defTask(TaskControl, 2);
-  while (true)
-  {
-      
-  }
+  // Start mutltasking (program does not return to 'main' from hereon)
+  //so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
+
 }
 
 
@@ -192,18 +191,11 @@ void loop()
 /** Additional functions ******************************************************/
 /******************************************************************************/
 
-// -- RX -----------------------
-// TIME: 172077
-// COUNT: 172
-// ID: 22449
-// DLC: size of rx_sensor
-// SENSOR: rx_sensor
-
 void print_rx_msg()
 {  
    
-  term.println("-----RESULTADO-----");
-  
+  Serial.println("-----RESULTADO-----");
+  hib.ledToggle(0);
   switch(rx_tecla){
           case '1':
           case '2':
@@ -211,21 +203,21 @@ void print_rx_msg()
           case '4':
           case '5':
           case '6':
-          term.print("Vamos al piso ");
-          term.print(rx_tecla);
+          Serial.println("Vamos al piso ");
+          Serial.println(rx_tecla);
           break;
           case '#':
-          term.print("Cerrando puertas");
+          Serial.println("Cerrando puertas");
           break;
           case '*':
-          term.print("Abriendo puertas");
+          Serial.println("Abriendo puertas");
           break;
           case '0':
-          term.print("A L A R M A");
+          Serial.println("A L A R M A");
           break;
           default:
           break;
    }
   
-  term.println("");
+  Serial.println("");
 }

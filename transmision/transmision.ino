@@ -31,11 +31,10 @@ void print_consola(char to_print);
 
 void KeyPadHook(uint8_t newKey)
 {
-  hib.ledToggle(5); // for debugging
+   // for debugging
 
    // TX by polling based on timer
     
-
      
       switch(newKey){
         case 0:
@@ -47,6 +46,7 @@ void KeyPadHook(uint8_t newKey)
           keyValue = 49 + newKey; // el 49 es el valor ASCII de 1, por lo tanto se guarda en
                                   // KeyValue el valor en char de cada piso
           term.print(keyValue);
+          hib.ledToggle(newKey);
           break;
         case 9:
          keyValue = '*'; // abrir puertas
@@ -55,7 +55,8 @@ void KeyPadHook(uint8_t newKey)
          keyValue = '#'; //cerrar puertas
          break;
         case 10:
-          keyValue = '0';
+          keyValue = '0'; // alarma
+          hib.buzzPlay(200, 3500);
           break;
          
         
@@ -126,7 +127,29 @@ void loop() {
 void print_consola(char to_print)
 {
   char charBuff[20];
-  sprintf(charBuff, "KeyValue: %i     ",to_print);
+  switch(to_print){
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+          case '6':
+          sprintf(charBuff, "Vamos al piso %c",to_print);
+          break;
+          case '#':
+          sprintf(charBuff, "Cerrando puertas");
+          break;
+          case '*':
+          sprintf(charBuff, "Abriendo puertas");
+          break;
+          case '0':
+          sprintf(charBuff, "A L A R M A");
+          break;
+          default:
+          
+          break;
+   }
+  hib.lcdClear();
   hib.lcdSetCursorFirstLine();
   hib.lcdPrint(charBuff);
 }
