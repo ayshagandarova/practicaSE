@@ -30,6 +30,21 @@ Flag fKeyEvent;
 
 const unsigned char maskKeyEvent = 0x01;
 
+
+
+
+/*****************
+  TICK hook
+******************/ 
+
+// Hook FOR TICKISR
+void timer5Hook ()
+{
+  so.updateTime(); // Call SO to update time (tick) and manage tasks
+}
+
+
+
 void KeyHook(uint8_t newKey){
   
   char charBuff[20];
@@ -128,6 +143,7 @@ void setup() {
 
   // Clear LCD
   hib.lcdClear();
+  so.begin();
 
   // Init can bus : baudrate = 500k, loopback mode, enable reception and transmission interrupts
   while (CAN.begin(CAN_500KBPS, MODE_NORMAL, false, false) != CAN_OK) {
@@ -152,5 +168,8 @@ void loop() {
       sCANControl = so.defSem(1); // intially accesible
       fKeyEvent= so.defFlag();
       so.defTask(KeyEvent, 2);
+      //Set up timer 5 so that the SO can regain the CPU every tick
+      hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);
+      
       so.enterMultiTaskingEnvironment();
 }
