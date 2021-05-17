@@ -28,8 +28,6 @@ Flag fCANEvent;
 
 const unsigned char maskControl = 0x01;
 
-volatile bool tx_timer_expired;
-
 volatile uint32_t rx_id;
 volatile char rx_tecla;
 
@@ -50,7 +48,6 @@ void TaskControl(){
       so.waitFlag(fCANEvent, maskControl);
       
       so.clearFlag(fCANEvent, maskControl);
-     Serial.println("########");
        switch(rx_id){
           case ID_PANEL_PULSADO:
             print_rx_msg();
@@ -68,11 +65,6 @@ void TaskControl(){
 /** Hooks *********************************************************************/
 /******************************************************************************/
 
-// Handle Timer 5
-void timer5Hook()
-{
-  tx_timer_expired = true;
-}
 
 
 // Handle reception interrupt
@@ -113,12 +105,11 @@ void isrCAN()
     hib.ledToggle(3); // for debugging
 
     rx_id = CAN.getRxMsgId();
-    Serial.println("*********");
-       Serial.println(rx_id);
     switch(rx_id) {
       case ID_PANEL_PULSADO:
        
-        CAN.getRxMsgData((byte*) &rx_tecla);
+        CAN.getRxMsgData((char*) &rx_tecla);
+        Serial.println(rx_tecla);
         so.setFlag(fCANEvent, maskControl);
         break;
 
@@ -140,7 +131,7 @@ void isrCAN()
 void setup()
 {
   // Init terminal
-  term.begin(115200);
+  Serial.begin(115200);
   term.clear();
   Serial.println("Soy Placa 2 imprimo lo que me pasa placa 1 ");
 
@@ -177,13 +168,10 @@ void loop()
   fCANEvent= so.defFlag();
   // Rx vars
   uint16_t rx_msg_count = 0;
-
-  hib.setUpTimer5(TIMER_TICKS_FOR_1s, TIMER_PSCALER_FOR_1s, timer5Hook);
   
   so.defTask(TaskControl, 2);
   // Start mutltasking (program does not return to 'main' from hereon)
-  //so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
-
+  so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
 }
 
 
@@ -193,7 +181,6 @@ void loop()
 
 void print_rx_msg()
 {  
-   
   Serial.println("-----RESULTADO-----");
   hib.ledToggle(0);
   switch(rx_tecla){
