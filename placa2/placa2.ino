@@ -6,30 +6,41 @@
 #include "timerConfig.h"
 #include "SO.h"
 
+/********************************************
+  Declaration of global shared vars and cons
+*********************************************/
+#define PRIO_TASK_CONTROL 4
 
+volatile uint32_t rx_id;
+volatile char rx_tecla;
+
+// RX consts and vars
+const uint32_t ID_PANEL_PULSADO =0x00022449; 
+const uint32_t ID_INCENDIO = 0x00022450; 
+const uint32_t ID_BASCULA = 0x00022451;  
 // the cs pin of the version after v1.1 is default to D9
 // v0.9b and v1.0 is default D10
 const int SPI_CS_PIN = 9;
 
-/******************************************************************************/
-/** Global variables **********************************************************/
-/******************************************************************************/
 
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
 SO so;
-Terminal term;
 
-const uint32_t ID_PANEL_PULSADO =0x00022449; 
-const uint32_t ID_INCENDIO = 0x00022450; 
-const uint32_t ID_BASCULA = 0x00022451;  
+/***************************
+  Declaration of semaphores
+***************************/ 
 
+
+/********************************
+  Declaration of flags and masks
+*********************************/
 Flag fCANEvent;
 
+// Define masks for adc and keypad event respectively
 const unsigned char maskControl = 0x01;
 
-volatile uint32_t rx_id;
-volatile char rx_tecla;
+
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
@@ -37,56 +48,16 @@ volatile char rx_tecla;
 
 void print_rx_msg();
 
-/******************************************************************************/
-/** TASKS *********************************************************************/
-/******************************************************************************/
 
-void TaskControl(){
+/*****************
+  TICK hook
+******************/ 
 
-    while(1){
-      
-      so.waitFlag(fCANEvent, maskControl);
-      
-      so.clearFlag(fCANEvent, maskControl);
-       switch(rx_id){
-          case ID_PANEL_PULSADO:
-            print_rx_msg();
-          break;
-          case ID_INCENDIO:
-          break;
-          case ID_BASCULA: 
-          break;
-        } 
-    }
+// Hook FOR TICKISR
+void timer5Hook ()
+{
+  so.updateTime(); // Call SO to update time (tick) and manage tasks
 }
-
-
-/******************************************************************************/
-/** Hooks *********************************************************************/
-/******************************************************************************/
-
-
-
-// Handle reception interrupt
-//
-// Note that all CAN interrupt sources/events invoque the same ISR.
-// 
-// If more than one CAN interrupt is enabled, then
-// some CAN interrupt events could occur quasi simultaneously.
-//
-// If this happens and the ISR has not finished yet,
-// then the new CAN interrupt events will not trigger an additional ISR.
-//
-// Therefore, for dealing with those cases, we have to check within the ISR
-// if more than one CAN event has happened.
-//
-// However, since we have only enabled the RX interrupt, we do not need to check this
-// kind of things in this example program!
-//
-// Anyway, just to show how to use the library to check what events have triggered the ISR,
-// in this ISR we check that the ISR has been actually triggered by an RX event.
-
-
 
 
 /*****************
@@ -112,7 +83,10 @@ void isrCAN()
         Serial.println(rx_tecla);
         so.setFlag(fCANEvent, maskControl);
         break;
-
+      case ID_INCENDIO:
+        break;
+      case ID_BASCULA:
+        break;
       default:
         break;
     }
@@ -124,31 +98,48 @@ void isrCAN()
 }
 
 
-/******************************************************************************/
-/** Setup *********************************************************************/
-/******************************************************************************/
+/******************************************
+  TASKS declarations and implementations
+*******************************************/ 
+
+void TaskControl(){
+
+    while(1){
+      
+      so.waitFlag(fCANEvent, maskControl);
+      
+      so.clearFlag(fCANEvent, maskControl);
+       switch(rx_id){
+          case ID_PANEL_PULSADO:
+            print_rx_msg();
+          break;
+          case ID_INCENDIO:
+          break;
+          case ID_BASCULA: 
+          break;
+        } 
+    }
+}
+
+
+
+/*****************
+  MAIN PROGRAM
+******************/
 
 void setup()
 {
-  // Init terminal
   Serial.begin(115200);
-  term.clear();
-  Serial.println("Soy Placa 2 imprimo lo que me pasa placa 1 ");
-
-  // Init HIB
+  so.begin();
   hib.begin();
-
-  // Clear LCD
   hib.lcdClear();
-  
-  // Init can bus : baudrate = 500k, loopback mode, enable reception and transmission interrupts
-  while (CAN.begin(CAN_500KBPS, MODE_NORMAL, true, false) != CAN_OK) {
+
+  // Init can bus : baudrate = 500k, normal mode, enable reception and transmission interrupts
+  while (CAN.begin(CAN_500KBPS, MODE_NORMAL, false, false) != CAN_OK) {
     Serial.println("CAN BUS Shield init fail");
     Serial.println(" Init CAN BUS Shield again");
     delay(100);
   }
-
-  
 
   Serial.println("CAN BUS Shield init ok!");
 
@@ -159,19 +150,24 @@ void setup()
 }
 
 
-/******************************************************************************/
-/** Main loop *****************************************************************/
-/******************************************************************************/
-
 void loop()
 {
-  fCANEvent= so.defFlag();
-  // Rx vars
-  uint16_t rx_msg_count = 0;
+      Serial.println("Placa 2: tareas de control del ascensor");
+      
+      // Definition and initialization of semaphores
+     
+      
+      // Definition and initialization of flags
+      fCANEvent = so.defFlag();
+      
+      // Definition and initialization of tasks
+      so.defTask(TaskControl, PRIO_TASK_CONTROL);
   
-  so.defTask(TaskControl, 2);
-  // Start mutltasking (program does not return to 'main' from hereon)
-  so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
+      //Set up timer 5 so that the SO can regain the CPU every tick
+      hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);
+
+      // Start mutltasking (program does not return to 'main' from here on)
+      so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
 }
 
 
