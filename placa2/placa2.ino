@@ -15,7 +15,7 @@ volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
 
-// RX consts and vars
+// RX consts and vars 
 const uint32_t ID_PANEL_PULSADO =0x00022449; 
 const uint32_t ID_INCENDIO = 0x00022450; 
 const uint32_t ID_BASCULA = 0x00022451;  

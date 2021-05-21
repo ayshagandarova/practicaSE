@@ -5,7 +5,6 @@
 #include "HIB.h"
 #include "timerConfig.h"
 #include "SO.h"
-#include <math.h>
 
 /********************************************
   Declaration of global shared vars and cons
@@ -34,8 +33,6 @@ volatile uint8_t pisoDest = 0;
   // stores last pressed keypad's key
   // shared between: keyHook (writes) and TaskPanelPulsado (reads)
 volatile uint8_t key = 0;
-#define NUM_LAST_KEYS 10
-uint8_t lastKeys[NUM_LAST_KEYS]; //array con utilización FIFO para guardar las teclas pulsadas
 
 // TX consts and vars
 const uint32_t ID_PANEL_PULSADO = 0x00022449; 
@@ -54,7 +51,6 @@ SO so;
 ***************************/ 
 Sem sCANControl;
 Sem sLCD;
-Sem sKeyBuffer; //para acceder al buffer de teclas pulsadas
 Sem sPisoDest;
 
 /********************************
@@ -90,7 +86,6 @@ void adcHook(uint16_t newAdcAdquiredValue)
 */
 void keyHook(uint8_t newKey)
 {
-  uint8_t posKey = 0;
   boolean keyFound = false;
   
   key = newKey;
@@ -112,25 +107,6 @@ void keyHook(uint8_t newKey)
           break;
     }
     
-  //si la tecla no está en el buffer de teclas la añadimos en la siguiente posición disponible
-  posKey = 0;
-  //so.waitSem(sKeyBuffer);
-  /*for (int i=0; i<NUM_LAST_KEYS; i++){
-     if (lastKeys[i] == key){
-        keyFound = true;
-        break;
-     } 
-     if (lastKeys[i] == EMPTY_NUMBER){
-        posKey = i;
-        break;
-     }
-   }
-
-   if(keyFound != true){
-     lastKeys[posKey] = key;
-   }*/
-   
-   //so.signalSem(sKeyBuffer);
    so.setFlag(fExtEvent, maskkeyEvent);
 }
 
@@ -175,24 +151,18 @@ void isrCAN()
       case 4:
       case 5:
       case 6:
-        //so.waitSem(sPisoDest);
         pisoDest = rxAct;
-        //so.signalSem(sPisoDest);
         so.setFlag(fActControl, maskUpDown);
         break;
       case 7:
-        //so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Cerrando puertas");
-        //so.signalSem(sLCD);
         break;
       case 8:
-        //so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Abriendo puertas");
-        //so.signalSem(sLCD);
         break;
       default:
         break;
@@ -213,97 +183,83 @@ void isrCAN()
   
 void TaskPanelPulsado()
 {
- 
-  
-  while(1){
+  while(1)
+  {
       // Check whether or not the TX buffer is available (no Tx still pending)
       // to request transmission of key
-      //if(lastKeys[0] != EMPTY_NUMBER){ //tengo que usar semáforo aquí también???
         so.waitFlag(fExtEvent, maskkeyEvent);
         so.clearFlag(fExtEvent, maskkeyEvent);
         
         so.waitSem(sCANControl);
-        if (CAN.checkPendingTransmission() != CAN_TXPENDING){
-          //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
+        if (CAN.checkPendingTransmission() != CAN_TXPENDING)
+        {
+          //envíamos por bus CAN la tecla
           CAN.sendMsgBufNonBlocking(ID_PANEL_PULSADO, CAN_EXTID, sizeof(INT8U), (INT8U *) &key);
-          //rotamos a la izquierda los valores de lastKeys, eliminando así el primero
-          //so.waitSem(sKeyBuffer);
-          /*for(int i=0;i<NUM_LAST_KEYS-1;i++)
-          {
-            lastKeys[i]=lastKeys[i+1];
-          }
-          lastKeys[NUM_LAST_KEYS] = EMPTY_NUMBER;*/
-          //so.signalSem(sKeyBuffer);
         }
         so.signalSem(sCANControl);
-      //}
-      
   }
 }
 
 // Autosuspends itself until the event: "kestroke" (key pressed)
 // When awake, then print the actual floor on the right-handed 7-seg display
 
-void TaskSimuladorCambioPiso(){
-  uint8_t pisoAct = 0;
-  uint8_t difPisos = 0;
+void TaskSimuladorCambioPiso()
+{
+  uint8_t pisoAct = 1;
   unsigned long nextActivationTick;
-  
-
-    // Wait until any of the bits of the flag fActControl
-    // indicated by the bits of maskUpDown are set to '1'        
-  so.waitFlag(fActControl, maskUpDown);
-      // Clear the flag fActControl to not process the same event twice
-  so.clearFlag(fActControl, maskUpDown);
+  boolean detenido = true;
+  char mensaje[16];
   
   while(1)
   {
-     difPisos = abs(pisoDest-pisoAct);
+    if (detenido) // espera a tener piso de destino
+    {
+      // Wait until any of the bits of the flag fActControl
+      // indicated by the bits of maskUpDown are set to '1'        
+      so.waitFlag(fActControl, maskUpDown);
+      // Clear the flag fActControl to not process the same event twice
+      so.clearFlag(fActControl, maskUpDown);
+      detenido = false;
+    }
     
-    if(pisoDest > pisoAct){
-        so.waitSem(sLCD);
-        hib.lcdClear();
-        hib.lcdSetCursorFirstLine();
-        hib.lcdPrint("Subiendo...");
-        so.signalSem(sLCD);
+    if(pisoDest > pisoAct) 
+    { 
+        sprintf(mensaje,"Subiendo...");
         pisoAct++;
-        Serial.println(pisoAct);
-        hib.d7sPrintDigit((uint8_t) pisoAct, hib.RIGHT_7SEG_DIS);
-    } else if (pisoDest < pisoAct){
-        so.waitSem(sLCD);
-        hib.lcdClear();
-        hib.lcdSetCursorFirstLine();
-        hib.lcdPrint("Bajando...");
-        so.signalSem(sLCD);
-        Serial.println(pisoAct);
-        pisoAct--;
-        hib.d7sPrintDigit((uint8_t) pisoAct, hib.RIGHT_7SEG_DIS);
-    } else {  // pisoAct==pisoDest
-        so.waitSem(sLCD);
-        hib.lcdClear();
-        hib.lcdSetCursorFirstLine();
-        hib.lcdPrint("Abriendo puertas");
-        so.signalSem(sLCD);
-        hib.ledOff(pisoAct-1);  // apagamos el led del piso 
         
+    } 
+    else if (pisoDest < pisoAct) 
+    {
+        sprintf(mensaje,"Bajando...");
+        pisoAct--;
+    } 
+    else 
+    {  // pisoAct==pisoDest
+        sprintf(mensaje,"Abriendo puertas");
+        hib.ledOff(pisoAct-1);  // apagamos el led del piso 
         so.waitSem(sCANControl);
           while (CAN.checkPendingTransmission() == CAN_TXPENDING);
           //{dormir 1 tick}
           //envíamos por bus CAN el piso Actual 
           CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
-   
         so.signalSem(sCANControl);
+        detenido = true;
     }
-  
+    // Actualizamos el LCD:
+    so.waitSem(sLCD);
+    hib.lcdClear();
+    hib.lcdSetCursorFirstLine();
+    hib.lcdPrint(mensaje);
+    so.signalSem(sLCD);
+    hib.d7sPrintDigit((uint8_t) pisoAct, hib.RIGHT_7SEG_DIS);
+    
     //hace tantas activaciones periódicas como pisos tiene que subir/bajar
-    if(difPisos > 0){
+    if(!detenido)
+    {
       // Autosuspend until time
       nextActivationTick = so.getTick();
       nextActivationTick = nextActivationTick + PERIOD_TASK_SIM; // Calculate next activation time;
       so.delayUntilTick(nextActivationTick);
-    }else {
-      so.waitFlag(fActControl, maskUpDown);
-      so.clearFlag(fActControl, maskUpDown);
     }
   }
 }
@@ -466,17 +422,13 @@ void setup() {
 void loop() {
       Serial.println("Placa 1: tareas de sensorización y actuación del ascensor");
 
-      //inicializamos array de teclas pulsadas indicando que todas las posiciones están libres
-      for (int i=0; i<NUM_LAST_KEYS; i++){
-        lastKeys[i] = EMPTY_NUMBER;
-      }
+      
       //el ascensor se encuentra en el piso 1 inicialmente
       hib.d7sPrintDigit((uint8_t) 1, hib.RIGHT_7SEG_DIS);
       
       // Definition and initialization of semaphores
       sCANControl = so.defSem(1); // intially accesible
       sLCD = so.defSem(1); // intially accesible
-      sKeyBuffer = so.defSem(1); // intially accesible
       Sem sPisoDest = so.defSem(1); // intially accesible
       
       // Definition and initialization of flags
