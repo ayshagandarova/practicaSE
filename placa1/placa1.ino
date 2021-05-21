@@ -15,13 +15,14 @@
 #define PRIO_TASK_SIM 3
 #define PRIO_TASK_TEM 2
 #define PRIO_TASK_LDR 1
-
+#define PRIO_TASK_PP 5
 
 #define PERIOD_TASK_PP 3
 #define PERIOD_TASK_TEM 4
 #define PERIOD_TASK_LDR 6
-#define PERIOD_TASK_LDR 3000 //no se si esto es lokura
+#define PERIOD_TASK_SIM 60 //no se si esto es lokura
 
+#define EMPTY_NUMBER 12
   // stores every new adc adquired value
   // shared between: adchook (writes) and TaskBascula (reads)
 volatile uint16_t adcValue = 0; // critical region beetween adcHook and TaskBascula
@@ -33,13 +34,14 @@ volatile uint8_t pisoDest = 0;
   // stores last pressed keypad's key
   // shared between: keyHook (writes) and TaskPanelPulsado (reads)
 volatile uint8_t key = 0;
-#define NUM_LAST_KEYS 10;
+#define NUM_LAST_KEYS 10
 uint8_t lastKeys[NUM_LAST_KEYS]; //array con utilización FIFO para guardar las teclas pulsadas
 
 // TX consts and vars
 const uint32_t ID_PANEL_PULSADO = 0x00022449; 
 const uint32_t ID_INCENDIO = 0x00022450; 
 const uint32_t ID_BASCULA = 0x00022451;  
+const uint32_t ID_SIMULADOR_CAMBIO_PISO = 0x00022452; 
 
 const int SPI_CS_PIN = 9;
 
@@ -64,7 +66,7 @@ Flag fActControl;
  // Define masks for adc and keypad event respectively
 const unsigned char maskAdcEvent = 0x01; // represents new adc value adquired
 const unsigned char maskUpDown = 0x01; //representa subir o bajar de piso
-
+const unsigned char maskkeyEvent = 0x02; //representa subir o bajar de piso
 
 /*****************
   ADC hook
@@ -112,13 +114,13 @@ void keyHook(uint8_t newKey)
     
   //si la tecla no está en el buffer de teclas la añadimos en la siguiente posición disponible
   posKey = 0;
-  so.waitSem(sKeyBuffer);
-  for (int i=0; i<NUM_LAST_KEYS; i++){
+  //so.waitSem(sKeyBuffer);
+  /*for (int i=0; i<NUM_LAST_KEYS; i++){
      if (lastKeys[i] == key){
         keyFound = true;
         break;
      } 
-     if (lastKeys[i] == -1){
+     if (lastKeys[i] == EMPTY_NUMBER){
         posKey = i;
         break;
      }
@@ -126,8 +128,10 @@ void keyHook(uint8_t newKey)
 
    if(keyFound != true){
      lastKeys[posKey] = key;
-   }
-   so.signalSem(sKeyBuffer);
+   }*/
+   
+   //so.signalSem(sKeyBuffer);
+   so.setFlag(fExtEvent, maskkeyEvent);
 }
 
 /*****************
@@ -171,24 +175,24 @@ void isrCAN()
       case 4:
       case 5:
       case 6:
-        so.waitSem(sPisoDest);
+        //so.waitSem(sPisoDest);
         pisoDest = rxAct;
-        so.signalSem(sPisoDest);
+        //so.signalSem(sPisoDest);
         so.setFlag(fActControl, maskUpDown);
         break;
       case 7:
-        so.waitSem(sLCD);
+        //so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Cerrando puertas");
-        so.signalSem(sLCD);
+        //so.signalSem(sLCD);
         break;
       case 8:
-        so.waitSem(sLCD);
+        //so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Abriendo puertas");
-        so.signalSem(sLCD);
+        //so.signalSem(sLCD);
         break;
       default:
         break;
@@ -209,35 +213,31 @@ void isrCAN()
   
 void TaskPanelPulsado()
 {
-  unsigned long nextActivationTick;
-  nextActivationTick = so.getTick();
+ 
   
-  while(1)
-  {
-    
+  while(1){
       // Check whether or not the TX buffer is available (no Tx still pending)
       // to request transmission of key
-      if(lastKeys[0] != -1){ //tengo que usar semáforo aquí también???
+      //if(lastKeys[0] != EMPTY_NUMBER){ //tengo que usar semáforo aquí también???
+        so.waitFlag(fExtEvent, maskkeyEvent);
+        so.clearFlag(fExtEvent, maskkeyEvent);
+        
         so.waitSem(sCANControl);
         if (CAN.checkPendingTransmission() != CAN_TXPENDING){
           //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
-          CAN.sendMsgBufNonBlocking(ID_PANEL_PULSADO, CAN_EXTID, sizeof(INT8U), (INT8U *) &lastKeys);
-          
+          CAN.sendMsgBufNonBlocking(ID_PANEL_PULSADO, CAN_EXTID, sizeof(INT8U), (INT8U *) &key);
           //rotamos a la izquierda los valores de lastKeys, eliminando así el primero
-          so.waitSem(sKeyBuffer);
-          for(int i=0;i<NUM_LAST_KEYS-1;i++)
+          //so.waitSem(sKeyBuffer);
+          /*for(int i=0;i<NUM_LAST_KEYS-1;i++)
           {
             lastKeys[i]=lastKeys[i+1];
           }
-          lastKeys[NUM_LAST_KEYS] = -1;
-          so.signalSem(sKeyBuffer);
+          lastKeys[NUM_LAST_KEYS] = EMPTY_NUMBER;*/
+          //so.signalSem(sKeyBuffer);
         }
         so.signalSem(sCANControl);
-      }
+      //}
       
-      // Autosuspend until time
-      nextActivationTick = nextActivationTick + PERIOD_TASK_PP; // Calculate next activation time;
-      so.delayUntilTick(nextActivationTick);
   }
 }
 
@@ -248,17 +248,17 @@ void TaskSimuladorCambioPiso(){
   uint8_t pisoAct = 0;
   uint8_t difPisos = 0;
   unsigned long nextActivationTick;
-  nextActivationTick = so.getTick();
+  
+
+    // Wait until any of the bits of the flag fActControl
+    // indicated by the bits of maskUpDown are set to '1'        
+  so.waitFlag(fActControl, maskUpDown);
+      // Clear the flag fActControl to not process the same event twice
+  so.clearFlag(fActControl, maskUpDown);
   
   while(1)
   {
-    // Wait until any of the bits of the flag fActControl
-    // indicated by the bits of maskUpDown are set to '1'        
-    so.waitFlag(fActControl, maskUpDown);
-    // Clear the flag fActControl to not process the same event twice
-    so.clearFlag(fActControl, maskUpDown);
-
-    difPisos = abs(pisoDest-pisoAct);
+     difPisos = abs(pisoDest-pisoAct);
     
     if(pisoDest > pisoAct){
         so.waitSem(sLCD);
@@ -267,6 +267,7 @@ void TaskSimuladorCambioPiso(){
         hib.lcdPrint("Subiendo...");
         so.signalSem(sLCD);
         pisoAct++;
+        Serial.println(pisoAct);
         hib.d7sPrintDigit((uint8_t) pisoAct, hib.RIGHT_7SEG_DIS);
     } else if (pisoDest < pisoAct){
         so.waitSem(sLCD);
@@ -274,21 +275,35 @@ void TaskSimuladorCambioPiso(){
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Bajando...");
         so.signalSem(sLCD);
+        Serial.println(pisoAct);
         pisoAct--;
         hib.d7sPrintDigit((uint8_t) pisoAct, hib.RIGHT_7SEG_DIS);
-    } else {
+    } else {  // pisoAct==pisoDest
         so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
         hib.lcdPrint("Abriendo puertas");
         so.signalSem(sLCD);
+        hib.ledOff(pisoAct-1);  // apagamos el led del piso 
+        
+        so.waitSem(sCANControl);
+          while (CAN.checkPendingTransmission() == CAN_TXPENDING);
+          //{dormir 1 tick}
+          //envíamos por bus CAN el piso Actual 
+          CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
+   
+        so.signalSem(sCANControl);
     }
   
     //hace tantas activaciones periódicas como pisos tiene que subir/bajar
     if(difPisos > 0){
       // Autosuspend until time
+      nextActivationTick = so.getTick();
       nextActivationTick = nextActivationTick + PERIOD_TASK_SIM; // Calculate next activation time;
       so.delayUntilTick(nextActivationTick);
+    }else {
+      so.waitFlag(fActControl, maskUpDown);
+      so.clearFlag(fActControl, maskUpDown);
     }
   }
 }
@@ -300,9 +315,9 @@ void TaskSimuladorCambioPiso(){
 void TaskBascula()
 {
   char str[16];
-  uint16_t auxAdcValue;
-  float auxSampledSensor;
-  const PESO_MAX = 400; //cual es el max del adc???????
+  uint8_t auxAdcValue;
+  uint8_t auxSampledSensor;
+  const uint16_t PESO_MAX = 400; //cual es el max del adc???????
   while(1)
   {
     // Wait until any of the bits of the flag fExtEvent
@@ -312,12 +327,12 @@ void TaskBascula()
     so.clearFlag(fExtEvent, maskAdcEvent);
 
     auxAdcValue = adcValue; // latch adquired sensor value in a local var
-    auxSampledSensor = ((float) auxAdcValue) / 2.0;
+    auxSampledSensor =  auxAdcValue / 2.0;
 
     so.waitSem(sCANControl);
         if (CAN.checkPendingTransmission() != CAN_TXPENDING){
           //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
-          CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(float), (float *) &auxSampledSensor);
+          CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(INT8U), (INT8U *) &auxSampledSensor);
         }
     so.signalSem(sCANControl);
     
@@ -340,7 +355,6 @@ void TaskBascula()
     }
   }
 }
-
 
 /*
 // Periodically sample both temperature sensors
@@ -434,7 +448,7 @@ void setup() {
   hib.lcdClear();
 
   // Init can bus : baudrate = 500k, normal mode, enable reception and transmission interrupts
-  while (CAN.begin(CAN_500KBPS, MODE_NORMAL, false, false) != CAN_OK) {
+  while (CAN.begin(CAN_500KBPS, MODE_NORMAL, true, false) != CAN_OK) {
     Serial.println("CAN BUS Shield init fail");
     Serial.println(" Init CAN BUS Shield again");
     delay(100);
@@ -454,9 +468,8 @@ void loop() {
 
       //inicializamos array de teclas pulsadas indicando que todas las posiciones están libres
       for (int i=0; i<NUM_LAST_KEYS; i++){
-        lastKeys[i] = -1;
+        lastKeys[i] = EMPTY_NUMBER;
       }
-
       //el ascensor se encuentra en el piso 1 inicialmente
       hib.d7sPrintDigit((uint8_t) 1, hib.RIGHT_7SEG_DIS);
       
@@ -471,7 +484,7 @@ void loop() {
       fActControl = so.defFlag();
       
       // Definition and initialization of tasks
-      so.defTask(TaskBascula, PRIO_TASK_ADC);
+      //so.defTask(TaskBascula, PRIO_TASK_ADC);
       so.defTask(TaskPanelPulsado, PRIO_TASK_PP);
       so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM);
       //so.defTask(TaskTEM, PRIO_TASK_TEM);
@@ -479,7 +492,7 @@ void loop() {
 
       // Set up keypad interrupt
       // expected time between keystrokes is set to 100 ms
-      hib.keySetIntDriven(100, KeyHook); 
+      hib.keySetIntDriven(100, keyHook); 
       
       //Set up adc
       hib.adcSetTimerDriven(TIMER_TICKS_FOR_125ms, TIMER_PSCALER_FOR_125ms, adcHook);
