@@ -11,6 +11,7 @@
 *********************************************/
 #define PRIO_TASK_CONTROL 4
 
+volatile uint8_t pisoActual;
 volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
@@ -43,14 +44,14 @@ Flag fCANEvent;
 // Define masks for adc and keypad event respectively
 const unsigned char maskControl = 0x01;
 
+// Posibles estados en los que se puede encontrar el ascensor 
+enum ascensor{Detenido, EnMovimiento, Bloqueado, Incendio};
 
+ascensor estado; 
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
 /******************************************************************************/
-
-
-
 
 /*****************
   TICK hook
@@ -70,7 +71,7 @@ void timer5Hook ()
 void isrCAN()
 {
   char auxSREG;
-
+  
   // Save the AVR Status Register by software
   // since the micro does not do it automatically
   auxSREG = SREG;
@@ -90,6 +91,10 @@ void isrCAN()
           CAN.getRxMsgData((INT8U *) &rx_peso);
       break;
       case ID_SIMULADOR_CAMBIO_PISO:
+          // si ha llegado al piso destino:
+          CAN.getRxMsgData((INT8U *) &pisoActual);
+          Serial.println("Volvemos a poner detenido (porque hemos llegado al piso)");
+          estado = Detenido;
       break;
     }
     so.setFlag(fCANEvent, maskControl);
@@ -99,57 +104,97 @@ void isrCAN()
   SREG = auxSREG;
 }
 
+/*
+ * switch(rx_tecla){
+                case 0:case 1: case 2: case 3: case 4:case 5:
+                Serial.print("Vamos al piso ");
+                Serial.println(auxKey);
+                break;
+                case 11:  Serial.println("Cerrando puertas");  break;
+                case 9:   Serial.println("Abriendo puertas");  break;
+                case 10:  Serial.println("A L A R M A");       break;
+                default:  break;
+ */
 
 /******************************************
   TASKS declarations and implementations
 *******************************************/ 
 
 void TaskControl(){
+    const uint16_t PESO_MAX = 255;
     uint8_t auxKey;
-    while(1){
-      
+    uint8_t actuacion;
+    while(1)
+    {
       so.waitFlag(fCANEvent, maskControl);
       so.clearFlag(fCANEvent, maskControl);
-     
-       switch(rx_id){
-          case ID_PANEL_PULSADO:
-            Serial.println("------ ASCENSOR -----");
-            
-                switch(rx_tecla){
-                        case 0:
-                        case 1:
-                        case 2:
-                        case 3:
-                        case 4:
-                        case 5:
-                        Serial.println("Vamos al piso ");
-                        Serial.println(rx_tecla);
-                        if (CAN.checkPendingTransmission() != CAN_TXPENDING){
-                          //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
-                          auxKey= rx_tecla + 1;
-                          CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &auxKey);  
-                        }
-                        break;
-                        case 11:
-                        Serial.println("Cerrando puertas");
-                        break;
-                        case 9:
-                        Serial.println("Abriendo puertas");
-                        break;
-                        case 10:
-                        Serial.println("A L A R M A");
-                        break;
-                        default:
-                        break;
-                 }
+      Serial.println(estado);
+      switch(Bloqueado)
+      {
+        case Detenido:
+          /*
+           * 1-6 -> subir/bajar al piso N
+           * 7 -> cerrar puertas
+           * 8 -> abrir puertas
+           */
+          switch(rx_id)
+          {
+            case ID_PANEL_PULSADO: // keyPad pulsado
+              auxKey= rx_tecla + 1;
+              if(auxKey<=6 && auxKey>=1) // si elige un piso
+              {
                 
-                Serial.println("");
-          break;
-          case ID_INCENDIO:
-          break;
-          case ID_BASCULA: 
-          break;
-        } 
+                if (auxKey==pisoActual)
+                {
+                  actuacion=8;
+                }else
+                {
+                  actuacion = auxKey;
+                  estado = EnMovimiento;
+                }
+              } else if(auxKey==10) // si se pulsa '*' Abrimos puertas
+              {
+                Serial.println("Abriendo");
+                actuacion=8;
+              } else if(auxKey==12) // su se pulsa '#' Cerramos puertas
+              {
+                Serial.println("Cerrando");
+                actuacion=7;
+              }
+              
+              break;
+            case ID_INCENDIO:
+            
+            break;
+            case ID_BASCULA: 
+              if(rx_peso>=PESO_MAX){
+                Serial.println("Peso máximo alcanzado");
+                estado = Bloqueado;
+              }
+            break;
+          } 
+        break;
+        case EnMovimiento:
+          
+          // aqui detecta la temperatura + luz 
+        break;
+        case Bloqueado:
+          if(rx_peso<PESO_MAX){
+            Serial.println("Ascensor pasa al estado de detenido");
+            estado = Detenido;
+          }
+          // mantenimientoAcabado
+        break;
+        case Incendio:
+          // luz<LUZMAX + temp<TEMPMAX + Fuego apagado
+        break;
+      }
+      
+      if (CAN.checkPendingTransmission() != CAN_TXPENDING)
+      {
+        //envíamos por bus CAN 
+        CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);  
+      }
     }
 }
 
@@ -184,8 +229,10 @@ void setup()
 
 void loop()
 {
-      Serial.println("Placa 2: tareas de control del ascensor");
       
+      Serial.println("Placa 2: tareas de control del ascensor");
+      estado = Detenido;
+      pisoActual=1;
       // Definition and initialization of semaphores
      
       
