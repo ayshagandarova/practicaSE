@@ -15,6 +15,7 @@ volatile uint8_t pisoActual;
 volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
+volatile uint8_t rx_temp;
 
 // RX consts and vars 
 const uint32_t ID_PANEL_PULSADO =0x00022449; 
@@ -85,7 +86,7 @@ void isrCAN()
          CAN.getRxMsgData((INT8U *) &rx_tecla);
       break;
       case ID_INCENDIO:
-         // CAN.getRxMsgData((INT8U *) &rx_tecla);
+          CAN.getRxMsgData((INT8U *) &rx_temp);
       break;
       case ID_BASCULA: 
           CAN.getRxMsgData((INT8U *) &rx_peso);
@@ -129,7 +130,7 @@ void TaskControl(){
       so.waitFlag(fCANEvent, maskControl);
       so.clearFlag(fCANEvent, maskControl);
       Serial.println(estado);
-      switch(Bloqueado)
+      switch(estado)
       {
         case Detenido:
           /*
@@ -141,6 +142,8 @@ void TaskControl(){
           {
             case ID_PANEL_PULSADO: // keyPad pulsado
               auxKey= rx_tecla + 1;
+              Serial.print("Hola tecla:");
+              Serial.println(auxKey);
               if(auxKey<=6 && auxKey>=1) // si elige un piso
               {
                 
@@ -164,7 +167,7 @@ void TaskControl(){
               
               break;
             case ID_INCENDIO:
-            
+              Serial.println("hay un incendio (dentro del isrCAN)");
             break;
             case ID_BASCULA: 
               if(rx_peso>=PESO_MAX){
