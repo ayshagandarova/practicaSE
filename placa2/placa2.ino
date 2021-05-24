@@ -10,8 +10,10 @@
   Declaration of global shared vars and cons
 *********************************************/
 #define PRIO_TASK_CONTROL 4
+#define PRIO_TASK_PANEL 5
+#define PRIO_TASK_COMANDOS 6
 
-volatile uint8_t pisoActual;
+volatile uint8_t pisoActual=1;
 volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
@@ -27,6 +29,7 @@ const int SPI_CS_PIN = 9;
 
 // TX consts and vars
 const uint32_t ID_CONTROL = 0x00022453;  
+
 
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
@@ -45,10 +48,30 @@ Flag fCANEvent;
 // Define masks for adc and keypad event respectively
 const unsigned char maskControl = 0x01;
 
+/********************************
+  Declaration of mailBoxes
+*********************************/
+
+MBox mbPanel;
+
+
 // Posibles estados en los que se puede encontrar el ascensor 
 enum ascensor{Detenido, EnMovimiento, Bloqueado, Incendio};
 
 ascensor estado; 
+
+struct infoAscensor
+{
+      uint8_t pisoAct;
+      uint8_t pisoDestino;
+      ascensor estado; // para ponerlo en palabras .name()
+      uint8_t temperatura;
+      char causa [20];
+};
+
+typedef infoAscensor informacion;
+
+
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
@@ -94,8 +117,6 @@ void isrCAN()
       case ID_SIMULADOR_CAMBIO_PISO:
           // si ha llegado al piso destino:
           CAN.getRxMsgData((INT8U *) &pisoActual);
-          Serial.println("Volvemos a poner detenido (porque hemos llegado al piso)");
-          estado = Detenido;
       break;
     }
     so.setFlag(fCANEvent, maskControl);
@@ -125,11 +146,15 @@ void TaskControl(){
     const uint16_t PESO_MAX = 255;
     uint8_t auxKey;
     uint8_t actuacion;
+    informacion info;
+    info.pisoAct = 1;
+    info.estado = estado;
+    info.temperatura = 25;
+    
     while(1)
     {
       so.waitFlag(fCANEvent, maskControl);
       so.clearFlag(fCANEvent, maskControl);
-      Serial.println(estado);
       switch(estado)
       {
         case Detenido:
@@ -142,8 +167,6 @@ void TaskControl(){
           {
             case ID_PANEL_PULSADO: // keyPad pulsado
               auxKey= rx_tecla + 1;
-              Serial.print("Hola tecla:");
-              Serial.println(auxKey);
               if(auxKey<=6 && auxKey>=1) // si elige un piso
               {
                 
@@ -154,6 +177,9 @@ void TaskControl(){
                 {
                   actuacion = auxKey;
                   estado = EnMovimiento;
+                  info.estado = estado;
+                  info.pisoDestino = auxKey;
+                  so.signalMBox(mbPanel, (byte*) &info);
                 }
               } else if(auxKey==10) // si se pulsa '*' Abrimos puertas
               {
@@ -167,38 +193,101 @@ void TaskControl(){
               
               break;
             case ID_INCENDIO:
-              Serial.println("hay un incendio (dentro del isrCAN)");
+              Serial.println("hay un incendio");
+              estado = Incendio;
+              info.estado = estado;
+              info.temperatura = rx_temp;
+              so.signalMBox(mbPanel, (byte*) &info);
             break;
             case ID_BASCULA: 
               if(rx_peso>=PESO_MAX){
-                Serial.println("Peso máximo alcanzado");
                 estado = Bloqueado;
+                info.estado = estado;
+                sprintf(info.causa,"Peso máx. superado");
+                so.signalMBox(mbPanel,(byte*) &info);
               }
+            break;
+            case ID_SIMULADOR_CAMBIO_PISO:
+              estado = Detenido;
+              info.pisoAct = pisoActual;
+              info.estado = estado;
+              so.signalMBox(mbPanel, (byte*) &info);
             break;
           } 
         break;
         case EnMovimiento:
+          if (rx_id == ID_SIMULADOR_CAMBIO_PISO){
+            estado = Detenido;
+            info.pisoAct = pisoActual;
+            info.estado = estado;
+            so.signalMBox(mbPanel, (byte*) &info);
+          }
           
-          // aqui detecta la temperatura + luz 
         break;
         case Bloqueado:
           if(rx_peso<PESO_MAX){
-            Serial.println("Ascensor pasa al estado de detenido");
+            Serial.println("ya no hay peso maximo");
             estado = Detenido;
+            info.estado = estado;
+            so.signalMBox(mbPanel, (byte*) &info);
           }
           // mantenimientoAcabado
         break;
         case Incendio:
+          Serial.println("incendio");
           // luz<LUZMAX + temp<TEMPMAX + Fuego apagado
+          //so.signalMBox(mbPanel, (byte*) info);
         break;
       }
-      
+
       if (CAN.checkPendingTransmission() != CAN_TXPENDING)
       {
         //envíamos por bus CAN 
         CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);  
       }
     }
+}
+
+/*
+ * TAREA PANEL
+ */
+
+void TaskPanel()
+{
+  informacion * rx_infoAscens;
+  informacion info;
+  while(1)
+  {
+    so.waitMBox(mbPanel, (byte**) &rx_infoAscens);
+    info = *rx_infoAscens;
+      Serial.println();
+      Serial.println("+++++++++++++++++++++++++++++++++");
+      Serial.println();
+      Serial.print("Piso Actual: ");
+      Serial.println(info.pisoAct);
+      
+      Serial.print("Estado Actual: ");
+      switch(info.estado){
+        case Detenido:
+          Serial.println("Detenido");
+        break;
+        case EnMovimiento:
+          Serial.println("En movimiento");
+          Serial.print("Piso destino: ");
+          Serial.println(info.pisoDestino);
+          
+        break;
+        case Bloqueado:
+          Serial.print("Bloqueado: ");
+          Serial.println(info.causa);
+        break;
+        case Incendio:
+          Serial.println("Incendio");
+        break;
+      }
+      Serial.print("Temperatura: ");  
+      Serial.println(info.temperatura);
+  }
 }
 
 
@@ -235,15 +324,21 @@ void loop()
       
       Serial.println("Placa 2: tareas de control del ascensor");
       estado = Detenido;
-      pisoActual=1;
       // Definition and initialization of semaphores
      
       
       // Definition and initialization of flags
       fCANEvent = so.defFlag();
+
+      // Definition and initialization of mailBoxes
+      mbPanel = so.defMBox();
+      
       
       // Definition and initialization of tasks
       so.defTask(TaskControl, PRIO_TASK_CONTROL);
+      so.defTask(TaskPanel, PRIO_TASK_PANEL);
+      //so.defTask(TaskComandos, PRIO_TASK_COMANDOS);
+
       //Set up timer 5 so that the SO can regain the CPU every tick
       hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);
 
