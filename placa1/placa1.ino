@@ -9,17 +9,18 @@
 /********************************************
   Declaration of global shared vars and cons
 *********************************************/
-#define PRIO_TASK_ADC 4
-#define PRIO_TASK_KEY 3
-#define PRIO_TASK_SIM 3
-#define PRIO_TASK_TEM 2
-#define PRIO_TASK_LDR 1
+#define PRIO_TASK_ADC 1
+#define PRIO_TASK_KEY 5
+#define PRIO_TASK_SIM_PISOS 4
+#define PRIO_TASK_TEM 3
+#define PRIO_TASK_LDR 3
 #define PRIO_TASK_PP 5
-#define PRIO_TASK_INC 4
+#define PRIO_TASK_INC 3
+#define PRIO_TASK_SIM_PUERT 3
 
 #define PERIOD_TASK_TEM 4
 #define PERIOD_TASK_LDR 6
-#define PERIOD_TASK_SIM 60 //no se si esto es lokura
+#define PERIOD_TASK_SIM 50 // simular el tiempo que tarda en subir los pisos o abrir y cerrar puertas
 
   // stores every new adc adquired value
   // shared between: adchook (writes) and TaskBascula (reads)
@@ -64,16 +65,21 @@ Sem sPisoDest;
 /********************************
   Declaration of flags and masks
 *********************************/
-Flag fExtEvent;
-Flag fActControl;
-Flag fIncendio;
 
+Flag fExtEvent;
  // Define masks for adc and keypad event respectively
 const unsigned char maskAdcEvent = 0x01; // represents new adc value adquired
-const unsigned char maskUpDown = 0x01; //representa subir o bajar de piso
 const unsigned char maskkeyEvent = 0x02; //representa subir o bajar de piso
+
+Flag fActControl;
+const unsigned char maskUpDown = 0x01; //representa subir o bajar de piso
+const unsigned char maskCerrarPuertas = 0x02; // abrir puertas
+const unsigned char maskAbrirPuertas = 0x04; // cerrar puertas  
+
+Flag fIncendio;
 const unsigned char maskTemp = 0x01; //representa subir o bajar de piso
 const unsigned char maskLight = 0x02; //representa subir o bajar de piso
+
 
 /*****************
   ADC hook
@@ -159,6 +165,8 @@ void isrCAN()
      */
 
      // quitar esto y ponerlo en una tarea a parte porque hay prints Ü
+     Serial.print("Actuacion: ");
+     Serial.println(rxAct);
     switch(rxAct)
     {
       case 1:
@@ -171,14 +179,10 @@ void isrCAN()
         so.setFlag(fActControl, maskUpDown);
         break;
       case 7:
-        hib.lcdClear();
-        hib.lcdSetCursorFirstLine();
-        hib.lcdPrint("Cerrando puertas");
+        so.setFlag(fActControl, maskCerrarPuertas);
         break;
       case 8:
-        hib.lcdClear();
-        hib.lcdSetCursorFirstLine();
-        hib.lcdPrint("Abriendo puertas");
+        so.setFlag(fActControl, maskAbrirPuertas);
         break;
       default:
         break;
@@ -224,7 +228,6 @@ void TaskSimuladorCambioPiso()
 {
   uint8_t pisoAct = 1;
    unsigned long nextActivationTick;
-   boolean detenido = true;
    const unsigned char PARADO = 0;
    const unsigned char SUBIENDO = 1;
    const unsigned char BAJANDO = 2;
@@ -280,14 +283,13 @@ void TaskSimuladorCambioPiso()
          break;
          case LLEGADA:
                state = PARADO;
-               sprintf(mensaje,"Abriendo puertas");
+               sprintf(mensaje,"Piso %i alcanzado", pisoDest);
                so.waitSem(sCANControl);
                  while (CAN.checkPendingTransmission() == CAN_TXPENDING);
                  CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
                so.signalSem(sCANControl);
                hib.ledOff(pisoAct-1);  // apagamos el led del piso 
          break;
-        
       }
      // Actualizamos el LCD:
      so.waitSem(sLCD);
@@ -300,6 +302,65 @@ void TaskSimuladorCambioPiso()
    }
  }
 
+
+// TAREA SIMULAR PUERTAS
+
+void TaskSimuladorPuertas() 
+{
+  const unsigned char mask = (maskCerrarPuertas | maskAbrirPuertas);
+  unsigned char flagValue;
+  char mensaje[16];
+   unsigned long nextActivationTick;
+  
+  while(1){
+     // Wait until any of the bits of the flag fActControl
+     // indicated by the bits of maskUpDown are set to '1' 
+     so.waitFlag(fActControl, mask);
+     
+     flagValue = so.readFlag(fActControl);
+
+     so.clearFlag(fActControl, mask);
+
+     switch(flagValue) {
+      case maskAbrirPuertas:
+        
+        //Serial.print("abriendo   ");
+        // Clear the flag fActControl to not process the same event twice
+        sprintf(mensaje,"Abriendo puertas");
+        so.waitSem(sLCD);
+           hib.lcdSetCursorSecondLine();
+           hib.lcdPrint(mensaje);
+        so.signalSem(sLCD);
+
+        
+      // Autosuspend until time
+      
+         nextActivationTick = so.getTick();
+         nextActivationTick = nextActivationTick + PERIOD_TASK_SIM; // Calculate next activation time;
+         so.delayUntilTick(nextActivationTick);
+         
+        so.setFlag(fActControl, maskCerrarPuertas);
+      break;
+      case maskCerrarPuertas:
+        so.clearFlag(fActControl, maskCerrarPuertas);
+        sprintf(mensaje,"Cerrando puertas");
+        so.waitSem(sLCD);
+           hib.lcdSetCursorSecondLine();
+           hib.lcdPrint(mensaje);
+        so.signalSem(sLCD);
+
+        // Autosuspend until time
+         nextActivationTick = so.getTick();
+         nextActivationTick = nextActivationTick + PERIOD_TASK_SIM; // Calculate next activation time;
+         so.delayUntilTick(nextActivationTick);
+
+         so.waitSem(sLCD);
+            hib.lcdClear();
+         so.signalSem(sLCD);
+      break;
+     }
+  }
+}
     
           
   
@@ -308,6 +369,7 @@ void TaskSimuladorCambioPiso()
 // preguntar a manuel si lo del adcHook esta bien :) (no queremos que envíe por CAN todo el rato el peso, solo cuando cambia)
 void TaskBascula()
 {
+  
   while(1)
   {
     
@@ -484,10 +546,11 @@ void loop() {
       // Definition and initialization of tasks
       so.defTask(TaskBascula, PRIO_TASK_ADC);
       so.defTask(TaskPanelPulsado, PRIO_TASK_PP);
-      so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM);
+      so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM_PISOS);
       so.defTask(TaskTEM, PRIO_TASK_TEM);
       so.defTask(TaskIncendio, PRIO_TASK_INC);
       so.defTask(TaskLDR, PRIO_TASK_LDR);
+      so.defTask(TaskSimuladorPuertas, PRIO_TASK_SIM_PUERT);
 
       // Set up keypad interrupt
       // expected time between keystrokes is set to 100 ms

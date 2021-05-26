@@ -169,26 +169,25 @@ void TaskControl(){
               auxKey= rx_tecla + 1;
               if(auxKey<=6 && auxKey>=1) // si elige un piso
               {
-                
-                if (auxKey==pisoActual)
-                {
-                  actuacion=8;
-                }else
-                {
-                  actuacion = auxKey;
-                  estado = EnMovimiento;
-                  info.estado = estado;
-                  info.pisoDestino = auxKey;
-                  so.signalMBox(mbPanel, (byte*) &info);
-                }
+                  if (auxKey==pisoActual)
+                  {
+                    actuacion=8;
+                  }else
+                  {
+                    actuacion = auxKey;
+                    estado = EnMovimiento;
+                    info.estado = estado;
+                    info.pisoDestino = auxKey;
+                    so.signalMBox(mbPanel, (byte*) &info);
+                  }
               } else if(auxKey==10) // si se pulsa '*' Abrimos puertas
               {
-                Serial.println("Abriendo");
                 actuacion=8;
+                Serial.println(actuacion);
               } else if(auxKey==12) // su se pulsa '#' Cerramos puertas
               {
-                Serial.println("Cerrando");
                 actuacion=7;
+                
               }
               
               break;
@@ -221,6 +220,8 @@ void TaskControl(){
             info.pisoAct = pisoActual;
             info.estado = estado;
             so.signalMBox(mbPanel, (byte*) &info);
+            Serial.println("en movimiento, enviamos abrir puertas");
+            actuacion = 8; // abrir puertas
           }
           
         break;
@@ -243,6 +244,7 @@ void TaskControl(){
       if (CAN.checkPendingTransmission() != CAN_TXPENDING)
       {
         //envíamos por bus CAN 
+        Serial.println(actuacion);
         CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);  
       }
     }
