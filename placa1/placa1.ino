@@ -441,10 +441,7 @@ void TaskTEM()
     // Autosuspend until time
     nextActivationTick = nextActivationTick + PERIOD_TASK_TEM; // Calculate next activation time;
     so.delayUntilTick(nextActivationTick);  
-    Serial.print("TEMP: ")  ;
-    Serial.println(temp)  ;
     if (temp>TEMP_MAX ){
-      Serial.println("TEMPERATURA MAXIMA ALCANZADA");
       so.setFlag(fIncendio, maskTemp);
     }
   }
@@ -479,7 +476,6 @@ void TaskLDR()
     so.delayUntilTick(nextActivationTick);    
 
     if (light>LIGHT_MAX ){
-       Serial.println("LUZ MAXIMA ALCANZADA");
       so.setFlag(fIncendio, maskLight);
     }
   }
@@ -501,7 +497,6 @@ void TaskIncendio()
     so.clearFlag(fIncendio, mask);
 
      if(!en_incendio){
-        //Serial.println("INCENDIO");
         so.waitSem(sCANControl);
             while (CAN.checkPendingTransmission() == CAN_TXPENDING);
               //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
@@ -560,7 +555,7 @@ void loop() {
       fIncendio = so.defFlag();
       
       // Definition and initialization of tasks
-      //so.defTask(TaskBascula, PRIO_TASK_ADC);
+      so.defTask(TaskBascula, PRIO_TASK_ADC);
       so.defTask(TaskPanelPulsado, PRIO_TASK_PP);
       so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM_PISOS);
       so.defTask(TaskTEM, PRIO_TASK_TEM);

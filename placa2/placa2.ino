@@ -158,7 +158,7 @@ void TaskControl() {
   unsigned char flagValue;
   const unsigned char maskComandos = (maskMantenimiento | maskFuegoApagado | maskReparado);
   const unsigned char mask = (maskCANEvent | maskComandos);
-
+  boolean enviar=false;
   while (1)
   {
     so.waitFlag(fControl, mask);
@@ -168,6 +168,8 @@ void TaskControl() {
     switch (estado)
     {
       case Detenido:
+        
+        
         memset(&info.causa, 0, sizeof(info.causa));
         /*
            1-6 -> subir/bajar al piso N
@@ -179,7 +181,8 @@ void TaskControl() {
           info.estado = estado;
           sprintf(info.causa, "Mantenimiento en curso");
           so.signalMBox(mbPanel, (byte*) &info);
-        } else {
+        } else if (rx_id != 0) {
+          
           switch (rx_id)
           {
             case ID_PANEL_PULSADO: // keyPad pulsado
@@ -205,10 +208,11 @@ void TaskControl() {
                 actuacion = 7;
 
               }
-
+              enviar = true;
               break;
 
             case ID_INCENDIO:  // añadir una tarea mixta que controle los leds, para que parpadeen, hasta que se arregle :)
+              Serial.println("DETENIDO: EN ID_INCENDIO ");
               estado = Incendio;
               info.estado = estado;
               info.temperatura = rx_temp;
@@ -230,14 +234,17 @@ void TaskControl() {
               break;
           }
         }
+        
         break;
       case EnMovimiento:
         if (rx_id == ID_SIMULADOR_CAMBIO_PISO) {
           estado = Detenido;
           info.pisoAct = pisoActual;
           info.estado = estado;
-          so.signalMBox(mbPanel, (byte*) &info);
+          enviar = true;
           actuacion = 8; // abrir puertas
+          so.signalMBox(mbPanel, (byte*) &info);
+          
         }
 
         break;
@@ -264,17 +271,16 @@ void TaskControl() {
           info.temperatura = 25;
           so.signalMBox(mbPanel, (byte*) &info);
         }
-        
-        // luz<LUZMAX + temp<TEMPMAX + Fuego apagado
-        //so.signalMBox(mbPanel, (byte*) info);
         break;
     }
-
-    if (CAN.checkPendingTransmission() != CAN_TXPENDING)
-    {
-      //envíamos por bus CAN
-      CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
-    }
+     if (enviar && CAN.checkPendingTransmission() != CAN_TXPENDING){
+        //envíamos por bus CAN
+        CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
+        enviar = false;
+      
+      }
+      rx_id = 0; // :)
+   
   }
 }
 
