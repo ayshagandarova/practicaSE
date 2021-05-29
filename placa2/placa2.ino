@@ -15,7 +15,7 @@
 #define PRIO_TASK_LUCES 3
 
 #define PERIOD_TASK_COMAND 4
-#define PERIOD_TASK_LUCES 30
+#define PERIOD_TASK_LUCES 50
 
 volatile uint8_t pisoActual = 1;
 volatile uint32_t rx_id;
@@ -217,11 +217,11 @@ void TaskControl() {
               break;
 
             case ID_INCENDIO:  // añadir una tarea mixta que controle los leds, para que parpadeen, hasta que se arregle :)
-              Serial.println("DETENIDO: EN ID_INCENDIO ");
               estado = Incendio;
               info.estado = estado;
               info.temperatura = rx_temp;
               so.signalMBox(mbPanel, (byte*) &info);
+              Serial.println("activamos los leds ");
               so.setFlag(fLuces, maskIncendio);
               break;
             case ID_BASCULA:
@@ -368,13 +368,14 @@ void TaskComandos()
 void TaskLucesIncendio()
 {
   unsigned long nextActivationTick;
-  const num_leds = 6;
+  const uint8_t num_leds = 6;
   boolean incendioON = false;
   while (1)
   {
     if (!incendioON) {
       so.waitFlag(fLuces, maskIncendio);
       so.clearFlag(fLuces, maskIncendio);
+      Serial.println("LUCEEEES");
       incendioON = true;
     } else {
       for (int i = 0; i < num_leds; i++) {
@@ -382,6 +383,9 @@ void TaskLucesIncendio()
       }
 
       if(estado != Incendio){
+        for (int i = 0; i < num_leds; i++) {
+          hib.ledOff(i);
+        }
         incendioON = false;
       }
       nextActivationTick = so.getTick();
