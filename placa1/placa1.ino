@@ -37,7 +37,7 @@ volatile uint8_t key = 0;
 
   // TaskIncendio
 volatile uint8_t temp=0;
-volatile uint8_t light=0;
+volatile uint16_t light=0;
 
 
 
@@ -378,8 +378,10 @@ void TaskBascula()
     
     // Clear the flag fExtEvent to not process the same event twice
     so.clearFlag(fExtEvent, maskAdcEvent);
+    
     if(!superado && adcValue >= PESO_MAX)
     {
+      Serial.println("peso max superado");
         superado = true;
         so.waitSem(sLCD);
           hib.lcdClear();
@@ -394,18 +396,21 @@ void TaskBascula()
             CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
         so.signalSem(sCANControl);
     }else if(superado && adcValue < PESO_MAX){
+      Serial.println("ya no hay peso maximo");
         superado = false;
         so.waitSem(sLCD);
           hib.lcdClear();
         so.signalSem(sLCD);
         so.waitSem(sCANControl);
           while (CAN.checkPendingTransmission() == CAN_TXPENDING);
-            //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
+            //envíamos por bus CAN la primera tecla almazenada en el array lastKeys
+            
             CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
         so.signalSem(sCANControl);
     }
 
     if(adcValue == 0){
+      Serial.println("peso=0 Luces apagadas");
       so.waitSem(sLCD);
         hib.lcdClear();
         hib.lcdSetCursorFirstLine();
@@ -423,10 +428,8 @@ void TaskTEM()
 {
   unsigned long nextActivationTick;
   float leftTemperature, rightTemperature;
-  const uint8_t TEMP_MAX = 50;
-  
+  const uint8_t TEMP_MAX = 35;
   nextActivationTick = so.getTick();
-  
   while(1)
   {
     // Sample left and right handed temperature sensors
@@ -435,21 +438,17 @@ void TaskTEM()
     rightTemperature = hib.temReadCelsius(hib.RIGHT_TEM_SENS);
 
     temp = (uint8_t) ((leftTemperature + rightTemperature)/2);
-
     // Autosuspend until time
     nextActivationTick = nextActivationTick + PERIOD_TASK_TEM; // Calculate next activation time;
-    so.delayUntilTick(nextActivationTick);    
-    
+    so.delayUntilTick(nextActivationTick);  
+    Serial.print("TEMP: ")  ;
+    Serial.println(temp)  ;
     if (temp>TEMP_MAX ){
+      Serial.println("TEMPERATURA MAXIMA ALCANZADA");
       so.setFlag(fIncendio, maskTemp);
     }
-//    else {
-//       so.clearFlag(fIncendio, maskTemp);
-//    }
   }
 }
-
-
 
 // Periodically sample both LDR sensors,
 // map each LDR value to a single digit,
@@ -460,7 +459,7 @@ void TaskLDR()
   unsigned long nextActivationTick;
   uint16_t leftLDR, rightLDR;
   float mapedRealValue;
-  uint8_t LIGHT_MAX = 1000; 
+  uint16_t LIGHT_MAX = 1000; 
   
   nextActivationTick = so.getTick();
   
@@ -475,12 +474,12 @@ void TaskLDR()
     // and print each on the corresponding 7-seg display
 
     light = (leftLDR + rightLDR)/2;
-    
     // Autosuspend until time
     nextActivationTick = nextActivationTick + PERIOD_TASK_LDR; // Calculate next activation time;
     so.delayUntilTick(nextActivationTick);    
 
     if (light>LIGHT_MAX ){
+       Serial.println("LUZ MAXIMA ALCANZADA");
       so.setFlag(fIncendio, maskLight);
     }
   }
@@ -493,20 +492,27 @@ void TaskLDR()
 
 void TaskIncendio() 
 {
-  const unsigned char mask = (maskTemp || maskLight);
+  const unsigned char mask = (maskTemp && maskLight);
+  boolean en_incendio = false;
   
    while(1)
   {     
     so.waitFlag(fIncendio, mask);
     so.clearFlag(fIncendio, mask);
 
-    //Serial.println("INCENDIO");
-//    so.waitSem(sCANControl);
-//        while (CAN.checkPendingTransmission() == CAN_TXPENDING);
-//          //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
-//          //preguntar
-//          CAN.sendMsgBufNonBlocking(ID_INCENDIO, CAN_EXTID, sizeof(INT8U), (INT8U *) &temp);
-//    so.signalSem(sCANControl);
+     if(!en_incendio){
+        //Serial.println("INCENDIO");
+        so.waitSem(sCANControl);
+            while (CAN.checkPendingTransmission() == CAN_TXPENDING);
+              //envíamos por bus CAN la primera tecla almazenada en el array lastKeys 
+              //preguntar
+              CAN.sendMsgBufNonBlocking(ID_INCENDIO, CAN_EXTID, sizeof(INT8U), (INT8U *) &temp);
+        so.signalSem(sCANControl);
+        en_incendio = true;
+     }
+     
+     // De momento solo para un incendio en la ejecución de las placas
+    
   }
 }
 
@@ -551,14 +557,15 @@ void loop() {
       // Definition and initialization of flags
       fExtEvent = so.defFlag();
       fActControl = so.defFlag();
+      fIncendio = so.defFlag();
       
       // Definition and initialization of tasks
       //so.defTask(TaskBascula, PRIO_TASK_ADC);
       so.defTask(TaskPanelPulsado, PRIO_TASK_PP);
       so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM_PISOS);
-      //so.defTask(TaskTEM, PRIO_TASK_TEM);
-      //so.defTask(TaskIncendio, PRIO_TASK_INC);
-      //so.defTask(TaskLDR, PRIO_TASK_LDR);
+      so.defTask(TaskTEM, PRIO_TASK_TEM);
+      so.defTask(TaskIncendio, PRIO_TASK_INC);
+      so.defTask(TaskLDR, PRIO_TASK_LDR);
       so.defTask(TaskSimuladorPuertas, PRIO_TASK_SIM_PUERT);
 
       // Set up keypad interrupt
