@@ -12,8 +12,10 @@
 #define PRIO_TASK_CONTROL 6
 #define PRIO_TASK_PANEL 5
 #define PRIO_TASK_COMANDOS 4
+#define PRIO_TASK_LUCES 3
 
 #define PERIOD_TASK_COMAND 4
+#define PERIOD_TASK_LUCES 30
 
 volatile uint8_t pisoActual = 1;
 volatile uint32_t rx_id;
@@ -52,6 +54,9 @@ const unsigned char maskCANEvent = 0x01;
 const unsigned char maskMantenimiento = 0x02;
 const unsigned char maskFuegoApagado = 0x04;
 const unsigned char maskReparado = 0x08;
+
+Flag fLuces;
+const unsigned char maskIncendio = 0x01;
 
 /********************************
   Declaration of mailBoxes
@@ -158,7 +163,7 @@ void TaskControl() {
   unsigned char flagValue;
   const unsigned char maskComandos = (maskMantenimiento | maskFuegoApagado | maskReparado);
   const unsigned char mask = (maskCANEvent | maskComandos);
-  boolean enviar=false;
+  boolean enviar = false;
   while (1)
   {
     so.waitFlag(fControl, mask);
@@ -168,8 +173,8 @@ void TaskControl() {
     switch (estado)
     {
       case Detenido:
-        
-        
+
+
         memset(&info.causa, 0, sizeof(info.causa));
         /*
            1-6 -> subir/bajar al piso N
@@ -182,7 +187,7 @@ void TaskControl() {
           sprintf(info.causa, "Mantenimiento en curso");
           so.signalMBox(mbPanel, (byte*) &info);
         } else if (rx_id != 0) {
-          
+
           switch (rx_id)
           {
             case ID_PANEL_PULSADO: // keyPad pulsado
@@ -217,6 +222,7 @@ void TaskControl() {
               info.estado = estado;
               info.temperatura = rx_temp;
               so.signalMBox(mbPanel, (byte*) &info);
+              so.setFlag(fLuces, maskIncendio);
               break;
             case ID_BASCULA:
               if (rx_peso >= PESO_MAX) {
@@ -234,7 +240,7 @@ void TaskControl() {
               break;
           }
         }
-        
+
         break;
       case EnMovimiento:
         if (rx_id == ID_SIMULADOR_CAMBIO_PISO) {
@@ -244,7 +250,7 @@ void TaskControl() {
           enviar = true;
           actuacion = 8; // abrir puertas
           so.signalMBox(mbPanel, (byte*) &info);
-          
+
         }
 
         break;
@@ -254,8 +260,7 @@ void TaskControl() {
           info.estado = estado;
           sprintf(info.causa, "Mantenimiento acabado :)");
           so.signalMBox(mbPanel, (byte*) &info);
-        }else
-        if (rx_id == ID_BASCULA && rx_peso < PESO_MAX ) {
+        } else if (rx_id == ID_BASCULA && rx_peso < PESO_MAX ) {
           estado = Detenido;
           info.estado = estado;
           sprintf(info.causa, "Peso adecuado :)");
@@ -265,7 +270,7 @@ void TaskControl() {
         // mantenimientoAcabado
         break;
       case Incendio:
-        if (flagValue == maskFuegoApagado){
+        if (flagValue == maskFuegoApagado) {
           estado = Detenido;
           info.estado = estado;
           info.temperatura = 25;
@@ -273,14 +278,14 @@ void TaskControl() {
         }
         break;
     }
-     if (enviar && CAN.checkPendingTransmission() != CAN_TXPENDING){
-        //envíamos por bus CAN
-        CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
-        enviar = false;
-      
-      }
-      rx_id = 0; // :)
-   
+    if (enviar && CAN.checkPendingTransmission() != CAN_TXPENDING) {
+      //envíamos por bus CAN
+      CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
+      enviar = false;
+
+    }
+    rx_id = 0; // :)
+
   }
 }
 
@@ -305,7 +310,7 @@ void TaskPanel()
     switch (info.estado) {
       case Detenido:
         Serial.println("Detenido");
-        if(info.causa[0] != 0){
+        if (info.causa[0] != 0) {
           Serial.println(info.causa);
         }
         break;
@@ -360,6 +365,33 @@ void TaskComandos()
 }
 
 
+void TaskLucesIncendio()
+{
+  unsigned long nextActivationTick;
+  const num_leds = 6;
+  boolean incendioON = false;
+  while (1)
+  {
+    if (!incendioON) {
+      so.waitFlag(fLuces, maskIncendio);
+      so.clearFlag(fLuces, maskIncendio);
+      incendioON = true;
+    } else {
+      for (int i = 0; i < num_leds; i++) {
+        hib.ledToggle(i);
+      }
+
+      if(estado != Incendio){
+        incendioON = false;
+      }
+      nextActivationTick = so.getTick();
+      nextActivationTick = nextActivationTick + PERIOD_TASK_LUCES; // Calculate next activation time;
+      so.delayUntilTick(nextActivationTick);
+    }
+  }
+}
+
+
 /*****************
   MAIN PROGRAM
 ******************/
@@ -397,6 +429,7 @@ void loop()
 
   // Definition and initialization of flags
   fControl = so.defFlag();
+  fLuces = so.defFlag();
 
   // Definition and initialization of mailBoxes
   mbPanel = so.defMBox();
@@ -406,6 +439,7 @@ void loop()
   so.defTask(TaskControl, PRIO_TASK_CONTROL);
   so.defTask(TaskPanel, PRIO_TASK_PANEL);
   so.defTask(TaskComandos, PRIO_TASK_COMANDOS);
+  so.defTask(TaskLucesIncendio, PRIO_TASK_LUCES);
 
   //Set up timer 5 so that the SO can regain the CPU every tick
   hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);
