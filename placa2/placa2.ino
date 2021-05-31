@@ -13,16 +13,15 @@
 #define PRIO_TASK_PANEL 5
 #define PRIO_TASK_COMANDOS 4
 #define PRIO_TASK_LUCES 3
-
 #define PERIOD_TASK_COMAND 4
 #define PERIOD_TASK_LUCES 50
 
-volatile uint8_t pisoActual = 1;
+volatile uint8_t pisoActual = 1; 
 volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
-volatile uint8_t rx_temp;
-volatile char comando;
+volatile char comando; // el comando que se introduce por terminal
+
 // RX consts and vars
 const uint32_t ID_PANEL_PULSADO = 0x00022449;
 const uint32_t ID_INCENDIO = 0x00022450;
@@ -34,11 +33,11 @@ const int SPI_CS_PIN = 9;
 // TX consts and vars
 const uint32_t ID_CONTROL = 0x00022453;
 
-
 HIB hib;
 MCP_CAN CAN(SPI_CS_PIN);
 SO so;
 Terminal term;
+
 /***************************
   Declaration of semaphores
 ***************************/
@@ -49,8 +48,8 @@ Terminal term;
 *********************************/
 Flag fControl;
 
-// Define masks for adc and keypad event respectively
 const unsigned char maskCANEvent = 0x01;
+// Máscaras referentes a los comandos introducidos por la terminal:
 const unsigned char maskMantenimiento = 0x02;
 const unsigned char maskFuegoApagado = 0x04;
 const unsigned char maskReparado = 0x08;
@@ -61,27 +60,22 @@ const unsigned char maskIncendio = 0x01;
 /********************************
   Declaration of mailBoxes
 *********************************/
-
 MBox mbPanel;
-
 
 // Posibles estados en los que se puede encontrar el ascensor
 enum ascensor {Detenido, EnMovimiento, Bloqueado, Incendio};
 
 ascensor estado;
 
-struct infoAscensor
-{
+// Struct que almacena el la información que se imprimirá por la terminal:
+struct infoAscensor{
   uint8_t pisoAct;
   uint8_t pisoDestino;
-  ascensor estado; // para ponerlo en palabras .name()
-  uint8_t temperatura;
+  ascensor estado; 
   char causa [25];
 };
 
 typedef infoAscensor informacion;
-
-
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
@@ -97,301 +91,271 @@ void timer5Hook ()
   so.updateTime(); // Call SO to update time (tick) and manage tasks
 }
 
-
 /*****************
   CANISR
 ******************/
 
 void isrCAN()
 {
-  char auxSREG;
+   char auxSREG;
+//   volatile uint8_t rx_temp;
 
   // Save the AVR Status Register by software
   // since the micro does not do it automatically
   auxSREG = SREG;
 
   if (CAN.rxInterrupt()) {
-    CAN.readRxMsg();
-    rx_id = CAN.getRxMsgId();
-
-    switch (rx_id) {
-      case ID_PANEL_PULSADO:
-        CAN.getRxMsgData((INT8U *) &rx_tecla);
-        break;
-      case ID_INCENDIO:
-        CAN.getRxMsgData((INT8U *) &rx_temp);
-        break;
-      case ID_BASCULA:
-        CAN.getRxMsgData((INT8U *) &rx_peso);
-        break;
-      case ID_SIMULADOR_CAMBIO_PISO:
-        // si ha llegado al piso destino:
-        CAN.getRxMsgData((INT8U *) &pisoActual);
-        break;
-    }
-    so.setFlag(fControl, maskCANEvent);
+        CAN.readRxMsg();
+        rx_id = CAN.getRxMsgId();
+    
+        switch (rx_id) {
+                case ID_PANEL_PULSADO:
+                      CAN.getRxMsgData((INT8U *) &rx_tecla);
+                break;
+      //          case ID_INCENDIO:
+      //            CAN.getRxMsgData((INT8U *) &rx_temp);
+      //          break;
+                case ID_BASCULA:
+                      CAN.getRxMsgData((INT8U *) &rx_peso);
+                break;
+                case ID_SIMULADOR_CAMBIO_PISO:
+                  // si ha llegado al piso destino:
+                      CAN.getRxMsgData((INT8U *) &pisoActual);
+                break;
+          }
+          so.setFlag(fControl, maskCANEvent); // activamos la tarea de control 
   }
+  
   // Restore the AVR Status Register by software
   // since the micro does not do it automatically
   SREG = auxSREG;
 }
 
-/*
-   switch(rx_tecla){
-                case 0:case 1: case 2: case 3: case 4:case 5:
-                Serial.print("Vamos al piso ");
-                Serial.println(auxKey);
-                break;
-                case 11:  Serial.println("Cerrando puertas");  break;
-                case 9:   Serial.println("Abriendo puertas");  break;
-                case 10:  Serial.println("A L A R M A");       break;
-                default:  break;
-*/
 
 /******************************************
   TASKS declarations and implementations
 *******************************************/
 
+/*
+ * Controla el funcionamiento del ascensor.
+ * Se activa periódicamente por flag.
+ * Determina la actuación en base al estado actual del ascensor, y de la máscara 
+ * que ha activado la tarea.
+ */
 void TaskControl() {
-  const uint16_t PESO_MAX = 255;
+  const uint8_t ABRIR_PUERTAS=8, CERRAR_PUERTAS=7;
+  const uint8_t ALMOHADILLA=12, ASTERISCO=10;
   uint8_t auxKey;
   uint8_t actuacion;
   informacion info;
   info.pisoAct = 1;
   info.estado = estado;
-  info.temperatura = 25;
   unsigned char flagValue;
-  const unsigned char maskComandos = (maskMantenimiento | maskFuegoApagado | maskReparado);
-  const unsigned char mask = (maskCANEvent | maskComandos);
+  const unsigned char mask = (maskCANEvent | maskMantenimiento | maskFuegoApagado | maskReparado);
   boolean enviar = false;
-  while (1)
-  {
-    so.waitFlag(fControl, mask);
-    flagValue = so.readFlag(fControl);
-    so.clearFlag(fControl, mask);
+  while (1){
+      // Wait until any of the bits of the flag fControl
+      // indicated by the bits of mask are set to '1'
+      so.waitFlag(fControl, mask);
+      flagValue = so.readFlag(fControl);
+      // Clear the flag fControl to not process the same event twice
+      so.clearFlag(fControl, mask);
 
-    switch (estado)
-    {
-      case Detenido:
-
-
-        memset(&info.causa, 0, sizeof(info.causa));
-        /*
-           1-6 -> subir/bajar al piso N
-           7 -> cerrar puertas
-           8 -> abrir puertas
-        */
-        if (flagValue == maskMantenimiento) {
-          estado = Bloqueado;
-          info.estado = estado;
-          sprintf(info.causa, "Mantenimiento en curso");
-          so.signalMBox(mbPanel, (byte*) &info);
-        } else if (rx_id != 0) {
-
-          switch (rx_id)
-          {
-            case ID_PANEL_PULSADO: // keyPad pulsado
-              auxKey = rx_tecla + 1;
-              if (auxKey <= 6 && auxKey >= 1) // si elige un piso
-              {
-                if (auxKey == pisoActual)
-                {
-                  actuacion = 8;
-                } else
-                {
-                  actuacion = auxKey;
-                  estado = EnMovimiento;
-                  info.estado = estado;
-                  info.pisoDestino = auxKey;
-                  so.signalMBox(mbPanel, (byte*) &info);
-                }
-              } else if (auxKey == 10) // si se pulsa '*' Abrimos puertas
-              {
-                actuacion = 8;
-              } else if (auxKey == 12) // su se pulsa '#' Cerramos puertas
-              {
-                actuacion = 7;
-
-              }
-              enviar = true;
-              break;
-
-            case ID_INCENDIO:  // añadir una tarea mixta que controle los leds, para que parpadeen, hasta que se arregle :)
-              estado = Incendio;
-              info.estado = estado;
-              info.temperatura = rx_temp;
-              so.signalMBox(mbPanel, (byte*) &info);
-              Serial.println("activamos los leds ");
-              so.setFlag(fLuces, maskIncendio);
-              break;
-            case ID_BASCULA:
-              if (rx_peso >= PESO_MAX) {
-                estado = Bloqueado;
-                info.estado = estado;
-                sprintf(info.causa, "Peso actual: %i", rx_peso);
-                so.signalMBox(mbPanel, (byte*) &info);
-              }
-              break;
-            case ID_SIMULADOR_CAMBIO_PISO:
-              estado = Detenido;
-              info.pisoAct = pisoActual;
-              info.estado = estado;
-              so.signalMBox(mbPanel, (byte*) &info);
-              break;
-          }
-        }
-
-        break;
-      case EnMovimiento:
-        if (rx_id == ID_SIMULADOR_CAMBIO_PISO) {
-          estado = Detenido;
-          info.pisoAct = pisoActual;
-          info.estado = estado;
-          enviar = true;
-          actuacion = 8; // abrir puertas
-          so.signalMBox(mbPanel, (byte*) &info);
-
-        }
-
-        break;
-      case Bloqueado:
-        if (flagValue == maskReparado) {
-          estado = Detenido;
-          info.estado = estado;
-          sprintf(info.causa, "Mantenimiento acabado :)");
-          so.signalMBox(mbPanel, (byte*) &info);
-        } else if (rx_id == ID_BASCULA && rx_peso < PESO_MAX ) {
-          estado = Detenido;
-          info.estado = estado;
-          sprintf(info.causa, "Peso adecuado :)");
-          so.signalMBox(mbPanel, (byte*) &info);
-        }
-
-        // mantenimientoAcabado
-        break;
-      case Incendio:
-        if (flagValue == maskFuegoApagado) {
-          estado = Detenido;
-          info.estado = estado;
-          info.temperatura = 25;
-          so.signalMBox(mbPanel, (byte*) &info);
-        }
-        break;
+    switch (estado){
+            case Detenido:
+                     memset(&info.causa, 0, sizeof(info.causa));  
+                    if (flagValue == maskMantenimiento) { // si es el comando de en mantenimiento
+                          estado = Bloqueado;
+                          info.estado = estado;
+                          sprintf(info.causa, "Mantenimiento en curso");
+                          so.signalMBox(mbPanel, (byte*) &info);
+                    } else if (flagValue == maskCANEvent) {  // si es un valor de CAN
+                          switch (rx_id){
+                                case ID_PANEL_PULSADO: // keyPad pulsado
+                                        auxKey = rx_tecla + 1;
+                                        if (auxKey <= 6 && auxKey >= 1) {  // es un piso
+                                              if (auxKey == pisoActual){   // si se ha pulsado el mismo piso, solo abrimos puertas
+                                                    actuacion = ABRIR_PUERTAS;
+                                              } else {  
+                                                    actuacion = auxKey;
+                                                    estado = EnMovimiento;
+                                                    info.estado = estado;
+                                                    info.pisoDestino = auxKey;
+                                                    so.signalMBox(mbPanel, (byte*) &info);
+                                              }
+                                        } else if (auxKey == ASTERISCO){   // si se pulsa '*' Abrimos puertas
+                                              actuacion = ABRIR_PUERTAS;
+                                        } else if (auxKey == ALMOHADILLA) {  // su se pulsa '#' Cerramos puertas
+                                              actuacion = CERRAR_PUERTAS;
+                                        }
+                                        enviar = true;
+                                break;
+                                case ID_INCENDIO:
+                                        estado = Incendio;
+                                        info.estado = estado;
+                                        so.signalMBox(mbPanel, (byte*) &info);
+                                        term.println("activamos los leds "); // no funciona
+                                        so.setFlag(fLuces, maskIncendio);
+                                break;
+                                case ID_BASCULA:
+                                        estado = Bloqueado;
+                                        info.estado = estado;
+                                        sprintf(info.causa, "Peso actual: %i", rx_peso);
+                                        so.signalMBox(mbPanel, (byte*) &info);
+                                break;
+                                case ID_SIMULADOR_CAMBIO_PISO:
+                                        estado = Detenido;
+                                        info.pisoAct = pisoActual;
+                                        info.estado = estado;
+                                        so.signalMBox(mbPanel, (byte*) &info);
+                                break;
+                          }
+                    }
+      
+            break;
+            case EnMovimiento:
+                    // Cuando el ascensor ha llegado al pisoDestino
+                    if (rx_id == ID_SIMULADOR_CAMBIO_PISO && flagValue == maskCANEvent) {
+                          estado = Detenido;
+                          info.pisoAct = pisoActual;
+                          info.estado = estado;
+                          enviar = true;
+                          actuacion = ABRIR_PUERTAS; // abrir puertas
+                          so.signalMBox(mbPanel, (byte*) &info);
+                    }
+            break;
+            case Bloqueado:
+                    if (flagValue == maskReparado) {   // acabamos el mantenimiento 
+                          estado = Detenido;
+                          info.estado = estado;
+                          sprintf(info.causa, "Mantenimiento acabado :)");
+                          so.signalMBox(mbPanel, (byte*) &info);
+                    } else if (rx_id == ID_BASCULA && flagValue == maskCANEvent) {  // el peso es adecuado
+                          estado = Detenido;
+                          info.estado = estado;
+                          sprintf(info.causa, "Peso adecuado :)");
+                          so.signalMBox(mbPanel, (byte*) &info);
+                    }
+            break;
+            case Incendio:
+                    if (flagValue == maskFuegoApagado) {  // se ha apagado el incendio 
+                          estado = Detenido;
+                          info.estado = estado;
+                          so.signalMBox(mbPanel, (byte*) &info);
+                    }
+            break;
     }
+    
+    // solo envía si debe realizar alguna actuación sobre la placa1
     if (enviar && CAN.checkPendingTransmission() != CAN_TXPENDING) {
-      //envíamos por bus CAN
-      CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
-      enviar = false;
-
+        //envíamos por bus CAN la actuación 
+        CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
+        enviar = false;
     }
-    rx_id = 0; // :)
-
   }
 }
 
 /*
-   TAREA PANEL
-*/
+ * Es esporádica por mailbox, se activa cada vez que recibe por mailBox procedente de la tareas de control
+ * Imprime por la terminal la información del ascensor
+ */
 
-void TaskPanel()
-{
+void TaskPanel(){
   informacion * rx_infoAscens;
   informacion info;
-  while (1)
-  {
-    so.waitMBox(mbPanel, (byte**) &rx_infoAscens);
-    info = *rx_infoAscens;
-    term.println("+++++++++++++++++++++++++++++++++");
-    Serial.println();
-    Serial.print("Piso Actual: ");
-    Serial.println(info.pisoAct);
-
-    Serial.print("Estado Actual: ");
-    switch (info.estado) {
-      case Detenido:
-        Serial.println("Detenido");
-        if (info.causa[0] != 0) {
-          Serial.println(info.causa);
+  while (1) {
+        so.waitMBox(mbPanel, (byte**) &rx_infoAscens);
+        info = *rx_infoAscens;
+        term.println("+++++++++++++++++++++++++++++++++");
+        term.println("");
+        term.print("Piso Actual: ");
+        term.println(info.pisoAct);
+        term.print("Estado Actual: ");
+        switch (info.estado) {
+              case Detenido:
+                    term.println("Detenido");
+                    if (info.causa[0] != 0) {
+                      term.println(info.causa);
+                    }
+              break;
+              case EnMovimiento:
+                    term.println("En movimiento");
+                    term.print("Piso destino: ");
+                    term.println(info.pisoDestino);
+              break;
+              case Bloqueado:
+                    term.print("Bloqueado: ");
+                    term.println(info.causa);
+              break;
+              case Incendio:
+                    term.println("Incendio");
+              break;
         }
-        break;
-      case EnMovimiento:
-        Serial.println("En movimiento");
-        Serial.print("Piso destino: ");
-        Serial.println(info.pisoDestino);
-        break;
-      case Bloqueado:
-        Serial.print("Bloqueado: ");
-        Serial.println(info.causa);
-        break;
-      case Incendio:
-        Serial.println("Incendio");
-        break;
-    }
-    Serial.print("Temperatura: ");
-    Serial.println(info.temperatura);
   }
 }
 
-
+/*
+ * Se activa periódicamente (TICK). 
+ * Cada vez que recibe uno de los 3 comandos (m, a, f)activa la tarea de control.
+ */
 void TaskComandos()
 {
-  const char EN_MANTENIMIENTO = 'm';  // si está en detenido
-  const char MANTENIMIENTO_ACABADO = 'a';  // solo si está bloqueado
-  const char FUEGO_APAGADO = 'f';   // en caso de incendio
+  const char EN_MANTENIMIENTO = 'm';  
+  const char MANTENIMIENTO_ACABADO = 'a';  
+  const char FUEGO_APAGADO = 'f';   
   unsigned long nextActivationTick;
 
   while (1) {
-    // Autosuspend until time
-    nextActivationTick = so.getTick();
-    comando = term.getChar(true);
-
-    switch (comando) {
-      case EN_MANTENIMIENTO:
-        so.setFlag(fControl, maskMantenimiento);
-        break;
-      case MANTENIMIENTO_ACABADO:
-        so.setFlag(fControl, maskReparado);
-        break;
-      case FUEGO_APAGADO:
-        so.setFlag(fControl, maskFuegoApagado);
-        break;
-
-    }
-
-
-    nextActivationTick = nextActivationTick + PERIOD_TASK_COMAND; // Calculate next activation time;
-    so.delayUntilTick(nextActivationTick);
+        nextActivationTick = so.getTick();
+        comando = term.getChar(true);  // 
+    
+        switch (comando) {
+                case EN_MANTENIMIENTO:
+                      so.setFlag(fControl, maskMantenimiento);
+                break;
+                case MANTENIMIENTO_ACABADO:
+                      so.setFlag(fControl, maskReparado);
+                break;
+                case FUEGO_APAGADO:
+                      so.setFlag(fControl, maskFuegoApagado);
+                break;
+        }
+        // Autosuspend until time
+        nextActivationTick = nextActivationTick + PERIOD_TASK_COMAND; // Calculate next activation time;
+        so.delayUntilTick(nextActivationTick);
   }
 }
 
-
-void TaskLucesIncendio()
-{
+/*
+ *  Es una tarea mixta, se activa esporádicamente cuando la activan por flag, 
+ *  y una vez activada se ejecuta periodicamente hasta que el estado del 
+ *  ascensor no sea Incendio.
+ *  Parpadea los LEDS.
+ */
+void TaskLucesIncendio(){
   unsigned long nextActivationTick;
   const uint8_t num_leds = 6;
   boolean incendioON = false;
-  while (1)
-  {
-    if (!incendioON) {
-      so.waitFlag(fLuces, maskIncendio);
-      so.clearFlag(fLuces, maskIncendio);
-      Serial.println("LUCEEEES");
-      incendioON = true;
-    } else {
-      for (int i = 0; i < num_leds; i++) {
-        hib.ledToggle(i);
-      }
-
-      if(estado != Incendio){
-        for (int i = 0; i < num_leds; i++) {
-          hib.ledOff(i);
+  while (1){
+        if (!incendioON) {
+              so.waitFlag(fLuces, maskIncendio);
+              so.clearFlag(fLuces, maskIncendio);
+              term.println("LUCEEEES");
+              incendioON = true;
+        } else {
+              for (int i = 0; i < num_leds; i++) {
+                    hib.ledToggle(i);
+              }
+              if(estado != Incendio){  // descativamos
+                    for (int i = 0; i < num_leds; i++) {
+                      hib.ledOff(i);
+                    }
+                    incendioON = false;
+              }
+              nextActivationTick = so.getTick();
+              nextActivationTick = nextActivationTick + PERIOD_TASK_LUCES; // Calculate next activation time;
+              so.delayUntilTick(nextActivationTick);
         }
-        incendioON = false;
-      }
-      nextActivationTick = so.getTick();
-      nextActivationTick = nextActivationTick + PERIOD_TASK_LUCES; // Calculate next activation time;
-      so.delayUntilTick(nextActivationTick);
-    }
   }
 }
 
@@ -409,12 +373,12 @@ void setup()
 
   // Init can bus : baudrate = 500k, normal mode, enable reception and transmission interrupts
   while (CAN.begin(CAN_500KBPS, MODE_NORMAL, true, false) != CAN_OK) {
-    Serial.println("CAN BUS Shield init fail");
-    Serial.println(" Init CAN BUS Shield again");
+    term.println("CAN BUS Shield init fail");
+    term.println(" Init CAN BUS Shield again");
     delay(100);
   }
 
-  Serial.println("CAN BUS Shield init ok!");
+  term.println("CAN BUS Shield init ok!");
 
   // Set CAN interrupt handler address in the position of interrupt number 0
   // since the INT output signal of the CAN shield is connected to
@@ -426,7 +390,7 @@ void setup()
 void loop()
 {
 
-  Serial.println("Placa 2: tareas de control del ascensor");
+  term.println("Placa 2: tareas de control del ascensor");
   estado = Detenido;
   // Definition and initialization of semaphores
 
@@ -451,7 +415,6 @@ void loop()
   // Start mutltasking (program does not return to 'main' from here on)
   so.enterMultiTaskingEnvironment(); // GO TO SCHEDULER
 }
-
 
 /******************************************************************************/
 /** Additional functions ******************************************************/
