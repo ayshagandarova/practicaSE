@@ -5,7 +5,7 @@
 #include "HIB.h"
 #include "timerConfig.h"
 #include "SO.h"
-
+#include <math.h>
 /********************************************
   Declaration of global shared vars and cons
 *********************************************/
@@ -18,6 +18,9 @@
 
 #define PERIOD_TASK_COMAND 4
 #define PERIOD_TASK_LUCES 5
+
+#define PERIOD_TASK_SECOND 20
+#define PERIOD_TASK_QUART 2
 
 volatile uint8_t pisoActual = 1; 
 volatile uint32_t rx_id;
@@ -57,6 +60,9 @@ const unsigned char maskMantenimiento = 0x02;
 const unsigned char maskFuegoApagado = 0x04;
 const unsigned char maskReparado = 0x08;
 
+Flag fEmergencia;
+const unsigned char maskEmergencia = 0x01;
+
 Flag fLuces;
 const unsigned char maskIncendio = 0x01;
 
@@ -79,6 +85,8 @@ struct infoAscensor{
 };
 
 typedef infoAscensor informacion;
+
+void playNote(uint8_t note, uint8_t octave, uint16_t duration);
 
 /******************************************************************************/
 /** Additional functions prototypes *******************************************/
@@ -190,8 +198,13 @@ void TaskControl() {
                                               actuacion = ABRIR_PUERTAS;
                                         } else if (auxKey == ALMOHADILLA) {  // su se pulsa '#' Cerramos puertas
                                               actuacion = CERRAR_PUERTAS;
+                                        } 
+
+                                        if (auxKey == 11){
+                                              so.setFlag(fEmergencia, maskEmergencia);
+                                        }else{
+                                              enviar = true;
                                         }
-                                        enviar = true;
                                 break;
                                 case ID_INCENDIO:
                                         estado = Incendio;
@@ -365,6 +378,56 @@ void TaskLucesIncendio(){
   }
 }
 
+void TaskLlamadaEmergencia(){
+  #define DO   1
+  #define RE   3
+  #define MI   5
+  #define FA   6
+  #define SOL  8
+  #define LA  10
+  #define SI  12
+  #define DOO   14
+  #define REE   16
+  #define MII   18
+  #define FAA   20
+  #define SOLL  22
+  #define LAA  24
+  #define SII  28
+  const uint8_t NUMERO_NOTAS = 12;
+  uint8_t numNota;
+  unsigned long nextActivationTick;
+  
+  const uint8_t partitura[NUMERO_NOTAS] = {SI, SOL, REE, SOL, RE, MII, REE, SOL, MII, REE, SOL, REE};
+ // const uint8_t partitura[NUMERO_NOTAS] = {DO, RE, MI FA, SOL, LA, SI, LA, SOL, FA, MI, RE, DO};
+  while(1){
+       so.waitFlag(fEmergencia, maskEmergencia);
+       so.clearFlag(fEmergencia, maskEmergencia);
+
+       // Tocar escala
+      numNota=0;
+      term.println("");
+      term.print("Llamando a emergencias");
+      for (uint8_t i = 0; i < 2; i++){
+        for (numNota = 0; numNota < NUMERO_NOTAS; numNota++){
+          playNote(partitura[numNota], 4, 250);
+      
+          if (partitura[numNota] == REE ){
+              playNote(FAA, 4, 250);
+          }else if(partitura[numNota] == MII){
+              playNote(LAA, 4, 250);
+          }
+          nextActivationTick = so.getTick();
+          nextActivationTick = nextActivationTick + PERIOD_TASK_QUART; // Calculate next activation time;
+          so.delayUntilTick(nextActivationTick);
+          term.print(".");
+        }
+        nextActivationTick = so.getTick();
+        nextActivationTick = nextActivationTick + PERIOD_TASK_SECOND; // Calculate next activation time;
+        so.delayUntilTick(nextActivationTick);
+      }
+      term.println("");
+  }
+}
 
 /*****************
   MAIN PROGRAM
@@ -404,16 +467,17 @@ void loop()
   // Definition and initialization of flags
   fControl = so.defFlag();
   fLuces = so.defFlag();
+  fEmergencia = so.defFlag();
 
   // Definition and initialization of mailBoxes
   mbPanel = so.defMBox();
-
 
   // Definition and initialization of tasks
   so.defTask(TaskLucesIncendio, PRIO_TASK_LUCES);
   so.defTask(TaskControl, PRIO_TASK_CONTROL);
   so.defTask(TaskPanel, PRIO_TASK_PANEL);
   so.defTask(TaskComandos, PRIO_TASK_COMANDOS);
+  so.defTask(TaskLlamadaEmergencia, PRIO_TASK_LUCES);
 
   //Set up timer 5 so that the SO can regain the CPU every tick
   hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);
@@ -425,3 +489,15 @@ void loop()
 /******************************************************************************/
 /** Additional functions ******************************************************/
 /******************************************************************************/
+
+// Plays a note in the buzzer
+// note: code of the note to play
+// octave: octave of the note
+// duration: time in miliseconds the sound is on
+void playNote(uint8_t note, uint8_t octave, uint16_t duration){
+  float v1 = (note-10.0)/12.0;
+  float v2 = octave-4;
+  unsigned int freq = 440 * pow(2, v1 + v2);
+
+  hib.buzzPlay(duration, freq);
+}
