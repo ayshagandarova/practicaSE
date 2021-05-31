@@ -9,12 +9,15 @@
 /********************************************
   Declaration of global shared vars and cons
 *********************************************/
-#define PRIO_TASK_CONTROL 6
-#define PRIO_TASK_PANEL 5
-#define PRIO_TASK_COMANDOS 4
-#define PRIO_TASK_LUCES 3
+// esporádica = 2
+// periódica = 1
+#define PRIO_TASK_CONTROL 2
+#define PRIO_TASK_PANEL 2
+#define PRIO_TASK_COMANDOS 1
+#define PRIO_TASK_LUCES 2
+
 #define PERIOD_TASK_COMAND 4
-#define PERIOD_TASK_LUCES 50
+#define PERIOD_TASK_LUCES 5
 
 volatile uint8_t pisoActual = 1; 
 volatile uint32_t rx_id;
@@ -194,7 +197,6 @@ void TaskControl() {
                                         estado = Incendio;
                                         info.estado = estado;
                                         so.signalMBox(mbPanel, (byte*) &info);
-                                        term.println("activamos los leds "); // no funciona
                                         so.setFlag(fLuces, maskIncendio);
                                 break;
                                 case ID_BASCULA:
@@ -338,10 +340,14 @@ void TaskLucesIncendio(){
   boolean incendioON = false;
   while (1){
         if (!incendioON) {
+              
               so.waitFlag(fLuces, maskIncendio);
               so.clearFlag(fLuces, maskIncendio);
-              term.println("LUCEEEES");
               incendioON = true;
+              for (int i = 0; i < num_leds; i++) {
+                  if (i % 2 == 0)
+                    hib.ledOn(i);
+              }
         } else {
               for (int i = 0; i < num_leds; i++) {
                     hib.ledToggle(i);
@@ -404,10 +410,10 @@ void loop()
 
 
   // Definition and initialization of tasks
+  so.defTask(TaskLucesIncendio, PRIO_TASK_LUCES);
   so.defTask(TaskControl, PRIO_TASK_CONTROL);
   so.defTask(TaskPanel, PRIO_TASK_PANEL);
   so.defTask(TaskComandos, PRIO_TASK_COMANDOS);
-  so.defTask(TaskLucesIncendio, PRIO_TASK_LUCES);
 
   //Set up timer 5 so that the SO can regain the CPU every tick
   hib.setUpTimer5(TIMER_TICKS_FOR_50ms, TIMER_PSCALER_FOR_50ms, timer5Hook);

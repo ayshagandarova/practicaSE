@@ -39,9 +39,6 @@ volatile uint8_t key = 0;
 volatile uint8_t temp = 0;
 volatile uint16_t light = 0;
 
-
-
-
 // TX consts and vars
 const uint32_t ID_PANEL_PULSADO = 0x00022449;
 const uint32_t ID_INCENDIO = 0x00022450;
@@ -80,8 +77,7 @@ const unsigned char maskAbrirPuertas = 0x04;
 Flag fIncendio;
 // Definimos las diferentes máscaras de los sensores de un incendio 
 const unsigned char maskTemp = 0x01; // sensor de temperatura
-const unsigned char maskLight = 0x02; // sensor de luz
-
+const unsigned char maskLight = 0x01; // sensor de luz
 
 /*****************
   ADC hook
@@ -101,7 +97,7 @@ void adcHook(uint16_t newAdcAdquiredValue)
 /*key [0-5] --> pisos
   key ==  9 --> abrir puertas
   key == 11 --> cerrar puertas
-  key == 10 --> alarma
+  key == 10 --> incendio
 */
 
 void keyHook(uint8_t newKey)
@@ -209,6 +205,7 @@ void TaskSimuladorCambioPiso()
 {
   uint8_t pisoAct = 1;
   unsigned long nextActivationTick;
+  unsigned long nextCANAwakeTick;
   const unsigned char PARADO = 0;
   const unsigned char SUBIENDO = 1;
   const unsigned char BAJANDO = 2;
@@ -266,7 +263,10 @@ void TaskSimuladorCambioPiso()
                       state = PARADO;
                       sprintf(mensaje, "Piso %i alcanzado", pisoDest);
                       so.waitSem(sCANControl);
-                          while (CAN.checkPendingTransmission() == CAN_TXPENDING);
+                          while (CAN.checkPendingTransmission() == CAN_TXPENDING){
+                            nextCANAwakeTick = so.getTick();
+                            so.delayUntilTick(nextCANAwakeTick + 1);
+                          }
                           CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
                       so.signalSem(sCANControl);
                       Serial.print("-----");
@@ -445,7 +445,6 @@ void TaskLDR()
       // Autosuspend until time
       nextActivationTick = nextActivationTick + PERIOD_TASK_LDR; // Calculate next activation time;
       so.delayUntilTick(nextActivationTick);
-  
       if (light > LIGHT_MAX ) {
           so.setFlag(fIncendio, maskLight);
       }
@@ -461,21 +460,27 @@ void TaskLDR()
 
 void TaskIncendio()
 {
-  const unsigned char mask = (maskTemp && maskLight);
-  boolean en_incendio = false;
+  const unsigned char mask = (maskTemp & maskLight);
+ // boolean en_incendio = false;
   while (1){
       // Wait until any of the bits of the flag fIncendio
       // indicated by the bits of mask are set to '1'
       so.waitFlag(fIncendio, mask);
       // Clear the flag fIncendio to not process the same event twice
       so.clearFlag(fIncendio, mask);
-      if (!en_incendio) {
+
+      Serial.print("tenemos un incendio... ");
+      Serial.print(" temperatura: ");
+      Serial.print(temp);
+      Serial.print(" light: ");
+      Serial.println(light);
+      //if (!en_incendio) {
           so.waitSem(sCANControl);
               while (CAN.checkPendingTransmission() == CAN_TXPENDING);
               CAN.sendMsgBufNonBlocking(ID_INCENDIO, CAN_EXTID, sizeof(INT8U), (INT8U *) &temp);
           so.signalSem(sCANControl);
-          en_incendio = true;
-      }
+        //  en_incendio = true;
+     // }
       // De momento solo para un incendio en la ejecución de las placas
   }
 }
