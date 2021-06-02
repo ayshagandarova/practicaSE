@@ -73,11 +73,12 @@ Flag fActControl;
 const unsigned char maskUpDown = 0x01; //representa subir o bajar de piso
 const unsigned char maskCerrarPuertas = 0x02;
 const unsigned char maskAbrirPuertas = 0x04;
+const unsigned char maskPuertasCerradas = 0x08;
 
 Flag fIncendio;
 // Definimos las diferentes máscaras de los sensores de un incendio 
 const unsigned char maskTemp = 0x01; // sensor de temperatura
-const unsigned char maskLight = 0x01; // sensor de luz
+const unsigned char maskLight = 0x02; // sensor de luz
 
 /*****************
   ADC hook
@@ -212,6 +213,7 @@ void TaskSimuladorCambioPiso()
   const unsigned char LLEGADA = 3;
   unsigned char state = PARADO;
   char mensaje[16];
+  
   while (1)
   {
 
@@ -220,9 +222,11 @@ void TaskSimuladorCambioPiso()
                       // Wait until any of the bits of the flag fActControl
                       // indicated by the bits of maskUpDown are set to '1'
                       so.waitFlag(fActControl, maskUpDown);
-                      // Clear the flag fActControl to not process the same event twice
                       so.clearFlag(fActControl, maskUpDown);
                       hib.ledOn(pisoDest - 1);   // activamos el led que indica el piso destino
+                      so.waitFlag(fActControl, maskPuertasCerradas);
+                      so.clearFlag(fActControl, maskPuertasCerradas);
+                      
                       if (pisoDest > pisoAct) {
                         state = SUBIENDO;
                         sprintf(mensaje, "Subiendo...");
@@ -288,7 +292,7 @@ void TaskSimuladorCambioPiso()
 void TaskSimuladorPuertas()
 {
   const unsigned char mask = (maskCerrarPuertas | maskAbrirPuertas);
-  unsigned char flagValue;
+  unsigned char flagValue; 
   char mensaje[16];
   unsigned long nextActivationTick;
 
@@ -331,6 +335,7 @@ void TaskSimuladorPuertas()
                     so.waitSem(sLCD);
                         hib.lcdClear();
                     so.signalSem(sLCD);
+                    so.setFlag(fActControl, maskPuertasCerradas);
             break;
     }
   }
@@ -437,7 +442,6 @@ void TaskLDR()
       
       light = (leftLDR + rightLDR) / 2; // Hacemos la media 
       // Autosuspend until time
-      Serial.println(light);
       nextActivationTick = nextActivationTick + PERIOD_TASK_LDR; // Calculate next activation time;
       so.delayUntilTick(nextActivationTick);
       if (light > LIGHT_MAX ) {
@@ -455,14 +459,11 @@ void TaskLDR()
 
 void TaskIncendio()
 {
-  const unsigned char mask = (maskTemp & maskLight);
- // boolean en_incendio = false;
   while (1){
-      // Wait until any of the bits of the flag fIncendio
-      // indicated by the bits of mask are set to '1'
-      so.waitFlag(fIncendio, mask);
-      // Clear the flag fIncendio to not process the same event twice
-      so.clearFlag(fIncendio, mask);
+      so.waitFlag(fIncendio, maskTemp);
+      so.clearFlag(fIncendio, maskTemp);
+      so.waitFlag(fIncendio, maskLight);
+      so.clearFlag(fIncendio, maskLight);
       //if (!en_incendio) {
           so.waitSem(sCANControl);
               while (CAN.checkPendingTransmission() == CAN_TXPENDING);
@@ -514,6 +515,8 @@ void loop() {
   fExtEvent = so.defFlag();
   fActControl = so.defFlag();
   fIncendio = so.defFlag();
+
+  so.setFlag(fActControl, maskPuertasCerradas);
 
   // Definition and initialization of tasks
   so.defTask(TaskBascula, PRIO_TASK_ADC);
