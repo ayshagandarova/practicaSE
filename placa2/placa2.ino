@@ -46,7 +46,7 @@ Terminal term;
 /***************************
   Declaration of semaphores
 ***************************/
-
+Sem sKeyBuffer; //para acceder al buffer de teclas pulsadas
 
 /********************************
   Declaration of flags and masks
@@ -161,8 +161,18 @@ void TaskControl() {
   info.pisoAct = 1;
   info.estado = estado;
   unsigned char flagValue;
+  const uint8_t NUM_LAST_KEYS = 5;
+  int8_t lastKeys[NUM_LAST_KEYS]; //array con utilización FIFO para guardar las teclas pulsadas
+  so.waitSem(sKeyBuffer);                  
+        for (int i=0; i<NUM_LAST_KEYS; i++){
+            lastKeys[i] = -1;
+         }
+  so.signalSem(sKeyBuffer);
+  uint8_t posKey = 0;
+  boolean keyFound = false;
   const unsigned char mask = (maskCANEvent | maskMantenimiento | maskFuegoApagado | maskReparado);
   boolean enviar = false;
+  
   while (1){
       // Wait until any of the bits of the flag fControl
       // indicated by the bits of mask are set to '1'
@@ -174,6 +184,7 @@ void TaskControl() {
     switch (estado){
             case Detenido:
                      memset(&info.causa, 0, sizeof(info.causa));  
+                    
                     if (flagValue == maskMantenimiento) { // si es el comando de en mantenimiento
                           estado = Bloqueado;
                           info.estado = estado;
@@ -184,6 +195,20 @@ void TaskControl() {
                                 case ID_PANEL_PULSADO: // keyPad pulsado
                                         auxKey = rx_tecla + 1;
                                         if (auxKey <= 6 && auxKey >= 1) {  // es un piso
+                                              so.waitSem(sKeyBuffer); 
+                                                //rotamos a la izquierda los valores de lastKeys, eliminando así el primero
+                                                if(lastKeys[0] != -1){
+                                                      for(int i=0;i<NUM_LAST_KEYS-1;i++){
+                                                           lastKeys[i]=lastKeys[i+1];
+                                                       }
+                                                       lastKeys[NUM_LAST_KEYS] = -1;
+                                                       rx_tecla = lastKeys[0];
+                                                       so.setFlag(fControl, maskCANEvent);
+                                                       term.print("PISOOOOO siguiente: ");
+                                                       term.println(lastKeys[0]);
+                                                }
+                                              so.signalSem(sKeyBuffer);
+                                         
                                               if (auxKey == pisoActual){   // si se ha pulsado el mismo piso, solo abrimos puertas
                                                     actuacion = ABRIR_PUERTAS;
                                               } else {  
@@ -236,6 +261,39 @@ void TaskControl() {
                           enviar = true;
                           actuacion = ABRIR_PUERTAS; // abrir puertas
                           so.signalMBox(mbPanel, (byte*) &info);
+                          so.waitSem(sKeyBuffer);
+                              if (lastKeys[0] != -1){
+                                rx_id = ID_PANEL_PULSADO;
+                                so.setFlag(fControl, maskCANEvent);
+                              }
+                          so.signalSem(sKeyBuffer);
+                    }
+                    //Si pulsan un piso mientras está en movimiento
+                    if (rx_id == ID_PANEL_PULSADO && flagValue == maskCANEvent) {
+                        
+                       //si la tecla no está en el buffer de teclas la añadimos en la siguiente posición disponible
+                        posKey = 0;
+                        so.waitSem(sKeyBuffer);
+                            for (int i=0; i<NUM_LAST_KEYS; i++){
+                                if (lastKeys[i] == rx_tecla){
+                                    keyFound = true;
+                                    break;
+                                } 
+                                if (lastKeys[i] == -1){
+                                  
+                                  posKey = i;
+                                  break;
+                                }
+                            }
+
+                            if(keyFound != true){
+                                lastKeys[posKey] = rx_tecla;
+                                Serial.print("piso pulsado: ");
+                                Serial.println(lastKeys[posKey]);
+                            }
+                            
+                            rx_tecla = lastKeys[0];
+                        so.signalSem(sKeyBuffer);
                     }
             break;
             case Bloqueado:
@@ -474,7 +532,8 @@ void loop()
   term.println("Placa 2: tareas de control del ascensor");
   estado = Detenido;
   // Definition and initialization of semaphores
-
+  sKeyBuffer = so.defSem(1); // intially accesible
+   //inicializamos array de teclas pulsadas indicando que todas las posiciones están libres
 
   // Definition and initialization of flags
   fControl = so.defFlag();
