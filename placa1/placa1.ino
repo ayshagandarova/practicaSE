@@ -203,7 +203,7 @@ void TaskPanelPulsado(){
  */
 void TaskSimuladorCambioPiso()
 {
-  uint8_t pisoAct = 1;
+  static uint8_t pisoAct = 1;
   unsigned long nextActivationTick;
   unsigned long nextCANAwakeTick;
   const unsigned char PARADO = 0;
@@ -256,10 +256,6 @@ void TaskSimuladorCambioPiso()
                       }
               break;
               case LLEGADA:
-                      Serial.println("EN LLEGADA");
-                      Serial.print("+++++");
-                      Serial.print("Antes del CAN pisoAct:");
-                      Serial.println(pisoAct);
                       state = PARADO;
                       sprintf(mensaje, "Piso %i alcanzado", pisoDest);
                       so.waitSem(sCANControl);
@@ -269,9 +265,6 @@ void TaskSimuladorCambioPiso()
                           }
                           CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
                       so.signalSem(sCANControl);
-                      Serial.print("-----");
-                      Serial.print("Despues del CAN pisoAct:");
-                      Serial.println(pisoAct);
                       hib.ledOff(pisoAct - 1); // apagamos el led del piso
                       so.clearFlag(fActControl, maskUpDown);
               break;
@@ -418,6 +411,7 @@ void TaskTEM()
     // Autosuspend until time
     nextActivationTick = nextActivationTick + PERIOD_TASK_TEM; // Calculate next activation time;
     so.delayUntilTick(nextActivationTick);
+    
     if (temp > TEMP_MAX ) {
       so.setFlag(fIncendio, maskTemp);
     }
@@ -443,6 +437,7 @@ void TaskLDR()
       
       light = (leftLDR + rightLDR) / 2; // Hacemos la media 
       // Autosuspend until time
+      Serial.println(light);
       nextActivationTick = nextActivationTick + PERIOD_TASK_LDR; // Calculate next activation time;
       so.delayUntilTick(nextActivationTick);
       if (light > LIGHT_MAX ) {
@@ -468,12 +463,6 @@ void TaskIncendio()
       so.waitFlag(fIncendio, mask);
       // Clear the flag fIncendio to not process the same event twice
       so.clearFlag(fIncendio, mask);
-
-      Serial.print("tenemos un incendio... ");
-      Serial.print(" temperatura: ");
-      Serial.print(temp);
-      Serial.print(" light: ");
-      Serial.println(light);
       //if (!en_incendio) {
           so.waitSem(sCANControl);
               while (CAN.checkPendingTransmission() == CAN_TXPENDING);
@@ -527,7 +516,7 @@ void loop() {
   fIncendio = so.defFlag();
 
   // Definition and initialization of tasks
-  //so.defTask(TaskBascula, PRIO_TASK_ADC);
+  so.defTask(TaskBascula, PRIO_TASK_ADC);
   so.defTask(TaskPanelPulsado, PRIO_TASK_PP);
   so.defTask(TaskSimuladorCambioPiso, PRIO_TASK_SIM_PISOS);
   so.defTask(TaskTEM, PRIO_TASK_TEM);

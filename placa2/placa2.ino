@@ -17,9 +17,8 @@
 #define PRIO_TASK_LUCES 2
 
 #define PERIOD_TASK_COMAND 4
-#define PERIOD_TASK_LUCES 5
+#define PERIOD_TASK_LUCES 10
 
-#define PERIOD_TASK_SECOND 20
 #define PERIOD_TASK_QUART 2
 
 volatile uint8_t pisoActual = 1; 
@@ -365,6 +364,7 @@ void TaskLucesIncendio(){
               for (int i = 0; i < num_leds; i++) {
                     hib.ledToggle(i);
               }
+              hib.buzzPlay(200, 3500);
               if(estado != Incendio){  // descativamos
                     for (int i = 0; i < num_leds; i++) {
                       hib.ledOff(i);
@@ -379,6 +379,14 @@ void TaskLucesIncendio(){
 }
 
 void TaskLlamadaEmergencia(){
+
+//  
+//const uint8_t NOTE_FS1  = 46; //la# =  
+//const uint8_t NOTE_E1= 43; //sol# = 
+//const uint8_t NOTE_DS1 = 39; //fa# = 
+//const uint8_t NOTE_AS1 = 58; //do# = 
+//const uint8_t NOTE_B1=64; //re# = 
+
   #define DO   1
   #define RE   3
   #define MI   5
@@ -393,11 +401,26 @@ void TaskLlamadaEmergencia(){
   #define SOLL  22
   #define LAA  24
   #define SII  28
-  const uint8_t NUMERO_NOTAS = 12;
+  //const uint8_t NUMERO_NOTAS = 16;
+
+//  La# Sol# Fa# Fa#  La# Sol# Fa# Sol#         Do# (3) 
+//
+//Sol# La# Sol# Fa# Re# (0.5) 
+//
+//La# Sol# Fa# Fa#  La# Sol# Fa# Sol#         Do# (3) 
+//
+////Sol# La# Sol# Fa# Re# (0.5) 
+//#define NOTE_FS1 46 //la# =  
+//#define NOTE_E1  43 //sol# = 
+//#define NOTE_DS1 39 //fa# = 
+//#define NOTE_AS1 58 //do# = 
+//#define NOTE_B1  64 //re# = 
+ 
+
   uint8_t numNota;
   unsigned long nextActivationTick;
-  
-  const uint8_t partitura[NUMERO_NOTAS] = {SI, SOL, REE, SOL, RE, MII, REE, SOL, MII, REE, SOL, REE};
+
+  const uint8_t partitura[12] = {SI, SOL, REE, SOL, RE, MII, REE, SOL, MII, REE, SOL, REE};
  // const uint8_t partitura[NUMERO_NOTAS] = {DO, RE, MI FA, SOL, LA, SI, LA, SOL, FA, MI, RE, DO};
   while(1){
        so.waitFlag(fEmergencia, maskEmergencia);
@@ -407,23 +430,12 @@ void TaskLlamadaEmergencia(){
       numNota=0;
       term.println("");
       term.print("Llamando a emergencias");
-      for (uint8_t i = 0; i < 2; i++){
-        for (numNota = 0; numNota < NUMERO_NOTAS; numNota++){
+      for (numNota = 0; numNota < 12; numNota++){
           playNote(partitura[numNota], 4, 250);
-      
-          if (partitura[numNota] == REE ){
-              playNote(FAA, 4, 250);
-          }else if(partitura[numNota] == MII){
-              playNote(LAA, 4, 250);
-          }
           nextActivationTick = so.getTick();
           nextActivationTick = nextActivationTick + PERIOD_TASK_QUART; // Calculate next activation time;
           so.delayUntilTick(nextActivationTick);
           term.print(".");
-        }
-        nextActivationTick = so.getTick();
-        nextActivationTick = nextActivationTick + PERIOD_TASK_SECOND; // Calculate next activation time;
-        so.delayUntilTick(nextActivationTick);
       }
       term.println("");
   }
@@ -497,7 +509,7 @@ void loop()
 void playNote(uint8_t note, uint8_t octave, uint16_t duration){
   float v1 = (note-10.0)/12.0;
   float v2 = octave-4;
-  unsigned int freq = 440 * pow(2, v1 + v2);
+  unsigned int freq = 340 * pow(2, v1 + v2);
 
   hib.buzzPlay(duration, freq);
 }
