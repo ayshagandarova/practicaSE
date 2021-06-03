@@ -9,10 +9,8 @@
 /********************************************
   Declaration of global shared vars and cons
 *********************************************/
-// esporádica = 2
-// periódica = 1
 #define PRIO_TASK_CONTROL 2
-#define PRIO_TASK_PANEL 2
+#define PRIO_TASK_PANEL 3
 #define PRIO_TASK_COMANDOS 1
 #define PRIO_TASK_LUCES 2
 
@@ -172,7 +170,7 @@ void TaskControl() {
   boolean keyFound = false;
   const unsigned char mask = (maskCANEvent | maskMantenimiento | maskFuegoApagado | maskReparado);
   boolean enviar = false;
-  
+ 
   while (1){
       // Wait until any of the bits of the flag fControl
       // indicated by the bits of mask are set to '1'
@@ -202,10 +200,6 @@ void TaskControl() {
                                                            lastKeys[i]=lastKeys[i+1];
                                                        }
                                                        lastKeys[NUM_LAST_KEYS] = -1;
-                                                       rx_tecla = lastKeys[0];
-                                                       so.setFlag(fControl, maskCANEvent);
-                                                       term.print("PISOOOOO siguiente: ");
-                                                       term.println(lastKeys[0]);
                                                 }
                                               so.signalSem(sKeyBuffer);
                                          
@@ -255,6 +249,7 @@ void TaskControl() {
             case EnMovimiento:
                     // Cuando el ascensor ha llegado al pisoDestino
                     if (rx_id == ID_SIMULADOR_CAMBIO_PISO && flagValue == maskCANEvent) {
+                          //Serial.println("Entro en enMovimiento");
                           estado = Detenido;
                           info.pisoAct = pisoActual;
                           info.estado = estado;
@@ -262,8 +257,9 @@ void TaskControl() {
                           actuacion = ABRIR_PUERTAS; // abrir puertas
                           so.signalMBox(mbPanel, (byte*) &info);
                           so.waitSem(sKeyBuffer);
-                              if (lastKeys[0] != -1){
+                              if (lastKeys[0] != -1){   //simulamos que en ese momento han vuelto a pulsar una tecla, pero en verdad coge la primera del buffer
                                 rx_id = ID_PANEL_PULSADO;
+                                rx_tecla = lastKeys[0];
                                 so.setFlag(fControl, maskCANEvent);
                               }
                           so.signalSem(sKeyBuffer);
@@ -273,26 +269,48 @@ void TaskControl() {
                         
                        //si la tecla no está en el buffer de teclas la añadimos en la siguiente posición disponible
                         posKey = 0;
+                        //KeyFound = false;
                         so.waitSem(sKeyBuffer);
-                            for (int i=0; i<NUM_LAST_KEYS; i++){
-                                if (lastKeys[i] == rx_tecla){
-                                    keyFound = true;
+                            for (int i=0; i<NUM_LAST_KEYS; i++){ 
+                                if (lastKeys[i] == rx_tecla){          
+                                    //keyFound = true;                  
                                     break;
                                 } 
-                                if (lastKeys[i] == -1){
-                                  
-                                  posKey = i;
-                                  break;
+                                if (lastKeys[i] == -1){  //si posición vacía guarda ahí
+                                    lastKeys[i] = rx_tecla;
+                                    break;
+                                }
+                                if(info.pisoDestino >= 3){  //atiende los pisos de mayor a menor
+                                    if(lastKeys[i] < rx_tecla){  //desplazar a la derecha
+                                        for(int j=NUM_LAST_KEYS;j>=i;j--){
+                                            lastKeys[j]=lastKeys[j-1];
+                                         }
+                                         lastKeys[i] = rx_tecla;
+                                         break;
+                                    }
+                                } else {  
+                                    if(lastKeys[i] > rx_tecla){  //desplazar a la derecha
+                                      for(int j=NUM_LAST_KEYS;j>=i;j--){
+                                            lastKeys[j]=lastKeys[j-1];
+                                         }
+                                       lastKeys[i] = rx_tecla;
+                                       break;
+                                    }
                                 }
                             }
 
-                            if(keyFound != true){
-                                lastKeys[posKey] = rx_tecla;
-                                Serial.print("piso pulsado: ");
-                                Serial.println(lastKeys[posKey]);
+                                /*
+                                Serial.println("-----------------BUFFER al añadir-------------");
+                                Serial.println(lastKeys[0]);
+                                Serial.println(lastKeys[1]);
+                                Serial.println(lastKeys[2]);
+                                Serial.println(lastKeys[3]);
+                                Serial.println(lastKeys[4]);
+                                Serial.println("-----------------BUFFER al añadir-------------");
+                                */
                             }
                             
-                            rx_tecla = lastKeys[0];
+                            
                         so.signalSem(sKeyBuffer);
                     }
             break;
@@ -338,6 +356,7 @@ void TaskPanel(){
   while (1) {
         so.waitMBox(mbPanel, (byte**) &rx_infoAscens);
         info = *rx_infoAscens;
+        term.println("");
         term.println("+++++++++++++++++++++++++++++++++");
         term.println("");
         term.print("Piso Actual: ");
@@ -437,14 +456,6 @@ void TaskLucesIncendio(){
 }
 
 void TaskLlamadaEmergencia(){
-
-//  
-//const uint8_t NOTE_FS1  = 46; //la# =  
-//const uint8_t NOTE_E1= 43; //sol# = 
-//const uint8_t NOTE_DS1 = 39; //fa# = 
-//const uint8_t NOTE_AS1 = 58; //do# = 
-//const uint8_t NOTE_B1=64; //re# = 
-
   #define DO   1
   #define RE   3
   #define MI   5
@@ -452,44 +463,23 @@ void TaskLlamadaEmergencia(){
   #define SOL  8
   #define LA  10
   #define SI  12
-  #define DOO   14
-  #define REE   16
-  #define MII   18
-  #define FAA   20
-  #define SOLL  22
-  #define LAA  24
-  #define SII  28
-  //const uint8_t NUMERO_NOTAS = 16;
-
-//  La# Sol# Fa# Fa#  La# Sol# Fa# Sol#         Do# (3) 
-//
-//Sol# La# Sol# Fa# Re# (0.5) 
-//
-//La# Sol# Fa# Fa#  La# Sol# Fa# Sol#         Do# (3) 
-//
-////Sol# La# Sol# Fa# Re# (0.5) 
-//#define NOTE_FS1 46 //la# =  
-//#define NOTE_E1  43 //sol# = 
-//#define NOTE_DS1 39 //fa# = 
-//#define NOTE_AS1 58 //do# = 
-//#define NOTE_B1  64 //re# = 
- 
+  const uint8_t NUMERO_NOTAS = 24;
 
   uint8_t numNota;
   unsigned long nextActivationTick;
 
-  const uint8_t partitura[12] = {SI, SOL, REE, SOL, RE, MII, REE, SOL, MII, REE, SOL, REE};
- // const uint8_t partitura[NUMERO_NOTAS] = {DO, RE, MI FA, SOL, LA, SI, LA, SOL, FA, MI, RE, DO};
+  const uint8_t partitura[NUMERO_NOTAS] = {SOL, FA, FA, SOL, FA, FA, FA, MI, SOL, FA, FA, SOL, FA, FA, FA, MI, SOL, FA, FA, SOL, FA, FA, FA, MI};
+  
   while(1){
        so.waitFlag(fEmergencia, maskEmergencia);
        so.clearFlag(fEmergencia, maskEmergencia);
 
        // Tocar escala
-      numNota=0;
+      
       term.println("");
       term.print("Llamando a emergencias");
-      for (numNota = 0; numNota < 12; numNota++){
-          playNote(partitura[numNota], 4, 250);
+      for (numNota = 0; numNota < NUMERO_NOTAS; numNota++){
+          playNote(partitura[numNota], 4, 197);
           nextActivationTick = so.getTick();
           nextActivationTick = nextActivationTick + PERIOD_TASK_QUART; // Calculate next activation time;
           so.delayUntilTick(nextActivationTick);
@@ -568,7 +558,7 @@ void loop()
 void playNote(uint8_t note, uint8_t octave, uint16_t duration){
   float v1 = (note-10.0)/12.0;
   float v2 = octave-4;
-  unsigned int freq = 340 * pow(2, v1 + v2);
+  unsigned int freq = 400 * pow(2, v1 + v2);  
 
   hib.buzzPlay(duration, freq);
 }

@@ -66,7 +66,7 @@ Sem sPisoDest;
 Flag fExtEvent;  
 // Define masks for adc and keypad event respectively
 const unsigned char maskAdcEvent = 0x01; // represents new adc value adquired
-const unsigned char maskkeyEvent = 0x02; //representa subir o bajar de piso
+const unsigned char maskKeyEvent = 0x02; //representa subir o bajar de piso
 
 Flag fActControl;
 // Definimos las máscaras de las diferentes actuaciones (que nos llegan del CAN)
@@ -103,11 +103,8 @@ void adcHook(uint16_t newAdcAdquiredValue)
 
 void keyHook(uint8_t newKey)
 {
-  key = newKey;
-  if(key == 10){
-     hib.buzzPlay(200, 3500);
-  }    
-  so.setFlag(fExtEvent, maskkeyEvent);
+  key = newKey; 
+  so.setFlag(fExtEvent, maskKeyEvent);
 }
 
 /*****************
@@ -182,13 +179,12 @@ void isrCAN()
  *  Envía la tecla a la tarea de control a través del CAN
  */
 void TaskPanelPulsado(){
-  unsigned char flagValue;
   while (1){
     // Check whether or not the TX buffer is available (no Tx still pending)
     // to request transmission of key
-    so.waitFlag(fExtEvent, maskkeyEvent);
-    flagValue = so.readFlag(fExtEvent);
-    so.clearFlag(fExtEvent, maskkeyEvent);
+    so.waitFlag(fExtEvent, maskKeyEvent);
+    so.clearFlag(fExtEvent, maskKeyEvent);
+    hib.ledOn(key);   // activamos el led que indica el piso destino
     so.waitSem(sCANControl);
       if (CAN.checkPendingTransmission() != CAN_TXPENDING){
         //envíamos por bus CAN la tecla
@@ -223,7 +219,6 @@ void TaskSimuladorCambioPiso()
                       // indicated by the bits of maskUpDown are set to '1'
                       so.waitFlag(fActControl, maskUpDown);
                       so.clearFlag(fActControl, maskUpDown);
-                      hib.ledOn(pisoDest - 1);   // activamos el led que indica el piso destino
                       so.waitFlag(fActControl, maskPuertasCerradas);
                       so.clearFlag(fActControl, maskPuertasCerradas);
                       
