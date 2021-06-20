@@ -23,6 +23,7 @@ volatile uint8_t pisoActual = 1;
 volatile uint32_t rx_id;
 volatile uint8_t rx_tecla;
 volatile uint16_t rx_peso;
+volatile uint8_t rx_temp;
 volatile char comando; // el comando que se introduce por terminal
 
 // RX consts and vars
@@ -41,10 +42,6 @@ MCP_CAN CAN(SPI_CS_PIN);
 SO so;
 Terminal term;
 
-/***************************
-  Declaration of semaphores
-***************************/
-Sem sKeyBuffer; //para acceder al buffer de teclas pulsadas
 
 /********************************
   Declaration of flags and masks
@@ -77,6 +74,7 @@ ascensor estado;
 struct infoAscensor{
   uint8_t pisoAct;
   uint8_t pisoDestino;
+  uint8_t temp;
   ascensor estado; 
   char causa [25];
 };
@@ -120,9 +118,9 @@ void isrCAN()
                 case ID_PANEL_PULSADO:
                       CAN.getRxMsgData((INT8U *) &rx_tecla);
                 break;
-      //          case ID_INCENDIO:
-      //            CAN.getRxMsgData((INT8U *) &rx_temp);
-      //          break;
+                case ID_INCENDIO:
+                  CAN.getRxMsgData((INT8U *) &rx_temp);
+                break;
                 case ID_BASCULA:
                       CAN.getRxMsgData((INT8U *) &rx_peso);
                 break;
@@ -160,17 +158,14 @@ void TaskControl() {
   info.estado = estado;
   unsigned char flagValue;
   const uint8_t NUM_LAST_KEYS = 5;
-  int8_t lastKeys[NUM_LAST_KEYS]; //array con utilización FIFO para guardar las teclas pulsadas
-  so.waitSem(sKeyBuffer);                  
-        for (int i=0; i<NUM_LAST_KEYS; i++){
-            lastKeys[i] = -1;
-         }
-  so.signalSem(sKeyBuffer);
+  int8_t lastKeys[NUM_LAST_KEYS]; //array con utilización FIFO para guardar las teclas pulsadas             
+  for (int i=0; i<NUM_LAST_KEYS; i++){
+      lastKeys[i] = -1;
+  }
   uint8_t posKey = 0;
-  boolean keyFound = false;
   const unsigned char mask = (maskCANEvent | maskMantenimiento | maskFuegoApagado | maskReparado);
   boolean enviar = false;
- 
+  unsigned long nextCANAwakeTick;
   while (1){
       // Wait until any of the bits of the flag fControl
       // indicated by the bits of mask are set to '1'
@@ -191,18 +186,16 @@ void TaskControl() {
                     } else if (flagValue == maskCANEvent) {  // si es un valor de CAN
                           switch (rx_id){
                                 case ID_PANEL_PULSADO: // keyPad pulsado
+                                        
                                         auxKey = rx_tecla + 1;
-                                        if (auxKey <= 6 && auxKey >= 1) {  // es un piso
-                                              so.waitSem(sKeyBuffer); 
-                                                //rotamos a la izquierda los valores de lastKeys, eliminando así el primero
-                                                if(lastKeys[0] != -1){
-                                                      for(int i=0;i<NUM_LAST_KEYS-1;i++){
-                                                           lastKeys[i]=lastKeys[i+1];
-                                                       }
-                                                       lastKeys[NUM_LAST_KEYS] = -1;
-                                                }
-                                              so.signalSem(sKeyBuffer);
-                                         
+                                        if (auxKey <= 6 && auxKey >= 1) {  // es un piso 
+                                              //rotamos a la izquierda los valores de lastKeys, eliminando así el primero
+                                              if(lastKeys[0] != -1){
+                                                    for(int i=0;i<NUM_LAST_KEYS-1;i++){
+                                                         lastKeys[i]=lastKeys[i+1];
+                                                     }
+                                                     lastKeys[NUM_LAST_KEYS] = -1;
+                                              }
                                               if (auxKey == pisoActual){   // si se ha pulsado el mismo piso, solo abrimos puertas
                                                     actuacion = ABRIR_PUERTAS;
                                               } else {  
@@ -217,16 +210,17 @@ void TaskControl() {
                                         } else if (auxKey == ALMOHADILLA) {  // su se pulsa '#' Cerramos puertas
                                               actuacion = CERRAR_PUERTAS;
                                         } 
-
+                                        
                                         if (auxKey == 11){
                                               so.setFlag(fEmergencia, maskEmergencia);
-                                        }else{
+                                        }else{ // si se ha pulsado un piso o abrir/cerrar puertas
                                               enviar = true;
                                         }
                                 break;
                                 case ID_INCENDIO:
                                         estado = Incendio;
                                         info.estado = estado;
+                                        info.temp = rx_temp;
                                         so.signalMBox(mbPanel, (byte*) &info);
                                         so.setFlag(fLuces, maskIncendio);
                                 break;
@@ -234,12 +228,6 @@ void TaskControl() {
                                         estado = Bloqueado;
                                         info.estado = estado;
                                         sprintf(info.causa, "Peso actual: %i", rx_peso);
-                                        so.signalMBox(mbPanel, (byte*) &info);
-                                break;
-                                case ID_SIMULADOR_CAMBIO_PISO:
-                                        estado = Detenido;
-                                        info.pisoAct = pisoActual;
-                                        info.estado = estado;
                                         so.signalMBox(mbPanel, (byte*) &info);
                                 break;
                           }
@@ -256,69 +244,53 @@ void TaskControl() {
                           enviar = true;
                           actuacion = ABRIR_PUERTAS; // abrir puertas
                           so.signalMBox(mbPanel, (byte*) &info);
-                          so.waitSem(sKeyBuffer);
-                              if (lastKeys[0] != -1){   //simulamos que en ese momento han vuelto a pulsar una tecla, pero en verdad coge la primera del buffer
-                                rx_id = ID_PANEL_PULSADO;
-                                rx_tecla = lastKeys[0];
-                                so.setFlag(fControl, maskCANEvent);
-                              }
-                          so.signalSem(sKeyBuffer);
+                          
+                          if (lastKeys[0] != -1){   //simulamos que en ese momento han vuelto a pulsar una tecla, pero en verdad coge la primera del buffer
+                            rx_id = ID_PANEL_PULSADO;
+                            rx_tecla = lastKeys[0];
+                            so.setFlag(fControl, maskCANEvent);
+                          }
                     }
                     //Si pulsan un piso mientras está en movimiento
-                    if (rx_id == ID_PANEL_PULSADO && flagValue == maskCANEvent) {
+                    if (rx_id == ID_PANEL_PULSADO && flagValue == maskCANEvent && (rx_tecla <= 5 && rx_tecla >= 0)) {
                         
                        //si la tecla no está en el buffer de teclas la añadimos en la siguiente posición disponible
                         posKey = 0;
-                        //KeyFound = false;
-                        so.waitSem(sKeyBuffer);
-                            for (int i=0; i<NUM_LAST_KEYS; i++){ 
-                                if (lastKeys[i] == rx_tecla){          
-                                    //keyFound = true;                  
-                                    break;
-                                } 
-                                if (lastKeys[i] == -1){  //si posición vacía guarda ahí
-                                    lastKeys[i] = rx_tecla;
-                                    break;
-                                }
-                                if(info.pisoDestino >= 3){  //atiende los pisos de mayor a menor
-                                    if(lastKeys[i] < rx_tecla){  //desplazar a la derecha
-                                        for(int j=NUM_LAST_KEYS;j>=i;j--){
-                                            lastKeys[j]=lastKeys[j-1];
-                                         }
-                                         lastKeys[i] = rx_tecla;
-                                         break;
-                                    }
-                                } else {  
+                        for (int i=0; i<NUM_LAST_KEYS; i++){ 
+                            if (lastKeys[i] == rx_tecla){          // piso ya estaba en el array
+                                  break;
+                            } 
+                            if (lastKeys[i] == -1){  //si posición vacía guarda ahí
+                                  lastKeys[i] = rx_tecla;
+                                  break;
+                            }
+                            if(info.pisoDestino >= 3){  //atiende los pisos de mayor a menor
+                                  if(lastKeys[i] < rx_tecla){  //desplazar a la derecha
+                                          for(int j=NUM_LAST_KEYS;j>=i;j--){
+                                              lastKeys[j]=lastKeys[j-1];
+                                          }
+                                          lastKeys[i] = rx_tecla;
+                                          break;
+                                  }
+                            } else {  
                                     if(lastKeys[i] > rx_tecla){  //desplazar a la derecha
-                                      for(int j=NUM_LAST_KEYS;j>=i;j--){
-                                            lastKeys[j]=lastKeys[j-1];
-                                         }
-                                       lastKeys[i] = rx_tecla;
-                                       break;
+                                          for(int j=NUM_LAST_KEYS;j>=i;j--){
+                                                lastKeys[j]=lastKeys[j-1];
+                                           }
+                                           lastKeys[i] = rx_tecla;
+                                           break;
                                     }
-                                }
                             }
-
-                                /*
-                                Serial.println("-----------------BUFFER al añadir-------------");
-                                Serial.println(lastKeys[0]);
-                                Serial.println(lastKeys[1]);
-                                Serial.println(lastKeys[2]);
-                                Serial.println(lastKeys[3]);
-                                Serial.println(lastKeys[4]);
-                                Serial.println("-----------------BUFFER al añadir-------------");
-                                */
-                            }
-                            
-                            
-                        so.signalSem(sKeyBuffer);
+                        }
+                    } else if(rx_id == ID_PANEL_PULSADO && flagValue == maskCANEvent && (rx_tecla == 10)) {
+                        so.setFlag(fEmergencia, maskEmergencia);
                     }
             break;
             case Bloqueado:
                     if (flagValue == maskReparado) {   // acabamos el mantenimiento 
                           estado = Detenido;
                           info.estado = estado;
-                          sprintf(info.causa, "Mantenimiento acabado :)");
+                          
                           so.signalMBox(mbPanel, (byte*) &info);
                     } else if (rx_id == ID_BASCULA && flagValue == maskCANEvent) {  // el peso es adecuado
                           estado = Detenido;
@@ -331,14 +303,19 @@ void TaskControl() {
                     if (flagValue == maskFuegoApagado) {  // se ha apagado el incendio 
                           estado = Detenido;
                           info.estado = estado;
+                          sprintf(info.causa, "Fuego apagado :)");
                           so.signalMBox(mbPanel, (byte*) &info);
                     }
             break;
     }
     
     // solo envía si debe realizar alguna actuación sobre la placa1
-    if (enviar && CAN.checkPendingTransmission() != CAN_TXPENDING) {
-        //envíamos por bus CAN la actuación 
+    if (enviar){
+        while (CAN.checkPendingTransmission() == CAN_TXPENDING){
+            nextCANAwakeTick = so.getTick();
+            so.delayUntilTick(nextCANAwakeTick + 1);
+        }
+         //envíamos por bus CAN la actuación 
         CAN.sendMsgBufNonBlocking(ID_CONTROL, CAN_EXTID, sizeof(INT8U), (INT8U *) &actuacion);
         enviar = false;
     }
@@ -379,7 +356,8 @@ void TaskPanel(){
                     term.println(info.causa);
               break;
               case Incendio:
-                    term.println("Incendio");
+                    term.print("Incendio con temperatura:");
+                    term.println(info.temp);
               break;
         }
   }
@@ -399,15 +377,18 @@ void TaskComandos()
   while (1) {
         nextActivationTick = so.getTick();
         comando = term.getChar(true);  // 
-    
         switch (comando) {
                 case EN_MANTENIMIENTO:
+                      Serial.println("Comando m: En mantenimiento introducido");
                       so.setFlag(fControl, maskMantenimiento);
+                      
                 break;
                 case MANTENIMIENTO_ACABADO:
+                      Serial.println("Comando a: Mantenimiento acabado introducido");
                       so.setFlag(fControl, maskReparado);
                 break;
                 case FUEGO_APAGADO:
+                      Serial.println("Comando f: Fuego apagado introducido");
                       so.setFlag(fControl, maskFuegoApagado);
                 break;
         }
@@ -434,8 +415,9 @@ void TaskLucesIncendio(){
               so.clearFlag(fLuces, maskIncendio);
               incendioON = true;
               for (int i = 0; i < num_leds; i++) {
-                  if (i % 2 == 0)
-                    hib.ledOn(i);
+                  if (i % 2 == 0) {
+                      hib.ledOn(i);
+                  }
               }
         } else {
               for (int i = 0; i < num_leds; i++) {
@@ -475,12 +457,13 @@ void TaskLlamadaEmergencia(){
        so.clearFlag(fEmergencia, maskEmergencia);
 
        // Tocar escala
-      
+ 
       term.println("");
       term.print("Llamando a emergencias");
       for (numNota = 0; numNota < NUMERO_NOTAS; numNota++){
           playNote(partitura[numNota], 4, 197);
           nextActivationTick = so.getTick();
+
           nextActivationTick = nextActivationTick + PERIOD_TASK_QUART; // Calculate next activation time;
           so.delayUntilTick(nextActivationTick);
           term.print(".");
@@ -519,12 +502,8 @@ void setup()
 void loop()
 {
 
-  term.println("Placa 2: tareas de control del ascensor");
+  term.println("Nodo2: cabina de control");
   estado = Detenido;
-  // Definition and initialization of semaphores
-  sKeyBuffer = so.defSem(1); // intially accesible
-   //inicializamos array de teclas pulsadas indicando que todas las posiciones están libres
-
   // Definition and initialization of flags
   fControl = so.defFlag();
   fLuces = so.defFlag();

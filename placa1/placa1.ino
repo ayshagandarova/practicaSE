@@ -35,9 +35,6 @@ volatile uint8_t pisoDest = 0;
 // shared between: keyHook (writes) and TaskPanelPulsado (reads)
 volatile uint8_t key = 0;
 
-// TaskIncendio
-volatile uint8_t temp = 0;
-volatile uint16_t light = 0;
 
 // TX consts and vars
 const uint32_t ID_PANEL_PULSADO = 0x00022449;
@@ -56,8 +53,11 @@ SO so;
 ***************************/
 Sem sCANControl;
 Sem sLCD;
-Sem sPisoDest;
 
+/********************************
+  Declaration of mailBoxes
+*********************************/
+MBox mbIncendio;
 
 /********************************
   Declaration of flags and masks
@@ -98,7 +98,7 @@ void adcHook(uint16_t newAdcAdquiredValue)
 /*key [0-5] --> pisos
   key ==  9 --> abrir puertas
   key == 11 --> cerrar puertas
-  key == 10 --> incendio
+  key == 10 --> llamada emergencia
 */
 
 void keyHook(uint8_t newKey)
@@ -154,10 +154,15 @@ void isrCAN()
         so.setFlag(fActControl, maskUpDown);   
         break;
       case 7:
-        so.setFlag(fActControl, maskCerrarPuertas);  
+        if (!(so.readFlag(fActControl) & maskPuertasCerradas)){
+            so.setFlag(fActControl, maskCerrarPuertas);  
+        }
         break;
       case 8:
-        so.setFlag(fActControl, maskAbrirPuertas);
+        if (so.readFlag(fActControl) & maskPuertasCerradas){
+            so.clearFlag(fActControl, maskPuertasCerradas);
+            so.setFlag(fActControl, maskAbrirPuertas);
+        }
         break;
       default:
         break;
@@ -179,6 +184,8 @@ void isrCAN()
  *  Envía la tecla a la tarea de control a través del CAN
  */
 void TaskPanelPulsado(){
+  unsigned long nextCANAwakeTick;
+  
   while (1){
     // Check whether or not the TX buffer is available (no Tx still pending)
     // to request transmission of key
@@ -186,10 +193,11 @@ void TaskPanelPulsado(){
     so.clearFlag(fExtEvent, maskKeyEvent);
     hib.ledOn(key);   // activamos el led que indica el piso destino
     so.waitSem(sCANControl);
-      if (CAN.checkPendingTransmission() != CAN_TXPENDING){
-        //envíamos por bus CAN la tecla
+        while (CAN.checkPendingTransmission() == CAN_TXPENDING){
+          nextCANAwakeTick = so.getTick();
+          so.delayUntilTick(nextCANAwakeTick + 1);
+        }
         CAN.sendMsgBufNonBlocking(ID_PANEL_PULSADO, CAN_EXTID, sizeof(INT8U), (INT8U *) &key);
-      }
     so.signalSem(sCANControl);
   }
 }
@@ -198,21 +206,18 @@ void TaskPanelPulsado(){
  *  Es una tarea mixta, se activa esporádicamente cuando la activan por flag, 
  *  y una vez activada se ejecuta periodicamente n veces. 
  */
-void TaskSimuladorCambioPiso()
-{
+void TaskSimuladorCambioPiso(){
   static uint8_t pisoAct = 1;
   unsigned long nextActivationTick;
   unsigned long nextCANAwakeTick;
-  const unsigned char PARADO = 0;
-  const unsigned char SUBIENDO = 1;
-  const unsigned char BAJANDO = 2;
-  const unsigned char LLEGADA = 3;
+  // Estados:
+    const unsigned char PARADO = 0;
+    const unsigned char SUBIENDO = 1;
+    const unsigned char BAJANDO = 2;
+    const unsigned char LLEGADA = 3;
   unsigned char state = PARADO;
-  char mensaje[16];
-  
-  while (1)
-  {
-
+  char mensaje[16];  // imprime el mensaje necesario en el LCD
+  while (1){
     switch (state) {
             case PARADO:
                       // Wait until any of the bits of the flag fActControl
@@ -220,8 +225,6 @@ void TaskSimuladorCambioPiso()
                       so.waitFlag(fActControl, maskUpDown);
                       so.clearFlag(fActControl, maskUpDown);
                       so.waitFlag(fActControl, maskPuertasCerradas);
-                      so.clearFlag(fActControl, maskPuertasCerradas);
-                      
                       if (pisoDest > pisoAct) {
                         state = SUBIENDO;
                         sprintf(mensaje, "Subiendo...");
@@ -264,7 +267,7 @@ void TaskSimuladorCambioPiso()
                           }
                           CAN.sendMsgBufNonBlocking(ID_SIMULADOR_CAMBIO_PISO, CAN_EXTID, sizeof(INT8U), (INT8U *) &pisoAct);
                       so.signalSem(sCANControl);
-                      hib.ledOff(pisoAct - 1); // apagamos el led del piso
+                          hib.ledOff(pisoAct - 1); // apagamos el led del piso
                       so.clearFlag(fActControl, maskUpDown);
               break;
     }
@@ -297,24 +300,19 @@ void TaskSimuladorPuertas()
     so.waitFlag(fActControl, mask);
     flagValue = so.readFlag(fActControl);
     so.clearFlag(fActControl, mask);
-
     switch (flagValue) {
-
             case maskAbrirPuertas:
                     sprintf(mensaje, "Abriendo puertas");
                     so.waitSem(sLCD);
                         hib.lcdSetCursorSecondLine();
                         hib.lcdPrint(mensaje);
                     so.signalSem(sLCD);
-            
                     // Autosuspend until time
                     nextActivationTick = so.getTick();
                     // Calculate next activation time:
                     nextActivationTick = nextActivationTick + PERIOD_TASK_SIM; 
                     so.delayUntilTick(nextActivationTick);
-            
-                    so.setFlag(fActControl, maskCerrarPuertas); // ahora, cerramos las puertas
-            break;
+           
             case maskCerrarPuertas:
                     sprintf(mensaje, "Cerrando puertas");
                     so.waitSem(sLCD);
@@ -330,61 +328,9 @@ void TaskSimuladorPuertas()
                     so.waitSem(sLCD);
                         hib.lcdClear();
                     so.signalSem(sLCD);
+                    
                     so.setFlag(fActControl, maskPuertasCerradas);
             break;
-    }
-  }
-}
-
-// preguntar a manuel si lo del adcHook esta bien :) 
-// (no queremos que envíe por CAN todo el rato el peso, solo cuando cambia)
-/*
- * Es periódica por flag (la activa adcHook)
- * Envía a la tarea de control (por CAN) si se ha alcanzado el peso máximo,
- * y si el peso ya no es el máximo.
- * Si el peso = 0, muestra un mensaje en el LCD ("Apagando luces")
- */
-void TaskBascula()
-{
-  boolean superado = false; 
-  while (1)
-  {
-    // Wait until any of the bits of the flag fExtEvent
-    // indicated by the bits of maskAdcEvent are set to '1'
-    so.waitFlag(fExtEvent, maskAdcEvent);
-    // Clear the flag fExtEvent to not process the same event twice
-    so.clearFlag(fExtEvent, maskAdcEvent);
-
-    if (!superado && adcValue >= PESO_MAX){ // si antes el peso no era máximo y ahora si
-          superado = true;
-          so.waitSem(sLCD);
-              hib.lcdClear();
-              hib.lcdSetCursorFirstLine();
-              hib.lcdPrint("¡PESO MAXIMO ");
-              hib.lcdSetCursorSecondLine();
-              hib.lcdPrint("ALCANZADO! ");
-          so.signalSem(sLCD);
-          so.waitSem(sCANControl);
-              while (CAN.checkPendingTransmission() == CAN_TXPENDING);
-              CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
-          so.signalSem(sCANControl);
-    } else if (superado && adcValue < PESO_MAX) { // si antes se había superado el peso y ahora no
-          superado = false;
-          so.waitSem(sLCD);
-              hib.lcdClear();
-          so.signalSem(sLCD);
-          so.waitSem(sCANControl);
-              while (CAN.checkPendingTransmission() == CAN_TXPENDING);
-              CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
-          so.signalSem(sCANControl);
-    }
-
-    if (adcValue == 0) {  // en el caso de que no hay personas, apagamos las luces
-          so.waitSem(sLCD);
-          hib.lcdClear();
-          hib.lcdSetCursorFirstLine();
-          hib.lcdPrint("Apagando luces");
-          so.signalSem(sLCD);
     }
   }
 }
@@ -397,9 +343,10 @@ void TaskBascula()
  */
 void TaskTEM()
 {
+  volatile uint8_t temp = 0;
   unsigned long nextActivationTick;
   float leftTemperature, rightTemperature;
-  const uint8_t TEMP_MAX = 35;
+  const uint8_t TEMP_MAX = 25;
   nextActivationTick = so.getTick();
   while (1)
   {
@@ -413,7 +360,7 @@ void TaskTEM()
     so.delayUntilTick(nextActivationTick);
     
     if (temp > TEMP_MAX ) {
-      so.setFlag(fIncendio, maskTemp);
+        so.signalMBox(mbIncendio, (byte*) &temp);
     }
   }
 }
@@ -425,13 +372,14 @@ void TaskTEM()
  */
 void TaskLDR()
 {
+  volatile uint16_t light = 0;
   unsigned long nextActivationTick;
   uint16_t leftLDR, rightLDR;
   float mapedRealValue;
   uint16_t LIGHT_MAX = 1000;
   nextActivationTick = so.getTick();
   while (1){
-      // Sample left and right handed temperature sensors
+      // Sample left and right handed light sensors
       leftLDR = hib.ldrReadAdc(hib.LEFT_LDR_SENS);
       rightLDR = hib.ldrReadAdc(hib.RIGHT_LDR_SENS);
       
@@ -452,23 +400,84 @@ void TaskLDR()
  * Enviamos por CAN la temperatura a la tarea de control.
  */
 
-void TaskIncendio()
-{
+void TaskIncendio(){
+  
+ uint8_t * rx_temp;
+ uint8_t temp;
+  unsigned long nextCANAwakeTick;
   while (1){
-      so.waitFlag(fIncendio, maskTemp);
-      so.clearFlag(fIncendio, maskTemp);
+      so.waitMBox(mbIncendio, (byte**) &rx_temp);
+      temp = *rx_temp;
       so.waitFlag(fIncendio, maskLight);
       so.clearFlag(fIncendio, maskLight);
-      //if (!en_incendio) {
-          so.waitSem(sCANControl);
-              while (CAN.checkPendingTransmission() == CAN_TXPENDING);
-              CAN.sendMsgBufNonBlocking(ID_INCENDIO, CAN_EXTID, sizeof(INT8U), (INT8U *) &temp);
-          so.signalSem(sCANControl);
-        //  en_incendio = true;
-     // }
-      // De momento solo para un incendio en la ejecución de las placas
+      so.waitSem(sCANControl);
+          while (CAN.checkPendingTransmission() == CAN_TXPENDING){
+              nextCANAwakeTick = so.getTick();
+              so.delayUntilTick(nextCANAwakeTick + 1);
+          }
+          CAN.sendMsgBufNonBlocking(ID_INCENDIO, CAN_EXTID, sizeof(INT8U), (INT8U *) &temp);
+      so.signalSem(sCANControl);
   }
 }
+
+
+/*
+ * Es periódica por flag (la activa adcHook)
+ * Envía a la tarea de control (por CAN) si se ha alcanzado el peso máximo,
+ * y si el peso ya no es el máximo.
+ * Si el peso = 0, muestra un mensaje en el LCD ("Apagando luces")
+ */
+void TaskBascula()
+{
+  const uint8_t PESO_MAX = 250;
+  unsigned long nextCANAwakeTick;
+  boolean superado = false; 
+  while (1)
+  {
+    // Wait until any of the bits of the flag fExtEvent
+    // indicated by the bits of maskAdcEvent are set to '1'
+    so.waitFlag(fExtEvent, maskAdcEvent);
+    // Clear the flag fExtEvent to not process the same event twice
+    so.clearFlag(fExtEvent, maskAdcEvent);
+
+    if (!superado && adcValue >= PESO_MAX){ // si antes el peso no era máximo y ahora si
+          superado = true;
+          so.waitSem(sLCD);
+              hib.lcdClear();
+              hib.lcdSetCursorFirstLine();
+              hib.lcdPrint("PESO MAXIMO ");
+              hib.lcdSetCursorSecondLine();
+              hib.lcdPrint("ALCANZADO! ");
+          so.signalSem(sLCD);
+          so.waitSem(sCANControl);
+              while (CAN.checkPendingTransmission() == CAN_TXPENDING){
+                  nextCANAwakeTick = so.getTick();
+                  so.delayUntilTick(nextCANAwakeTick + 1);
+              }
+              CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
+          so.signalSem(sCANControl);
+          
+    } else if (superado && adcValue < PESO_MAX) { // si antes se había superado el peso y ahora no
+          superado = false;
+          so.waitSem(sLCD);
+              hib.lcdClear();
+          so.signalSem(sLCD);
+          so.waitSem(sCANControl);
+              while (CAN.checkPendingTransmission() == CAN_TXPENDING);
+              CAN.sendMsgBufNonBlocking(ID_BASCULA, CAN_EXTID, sizeof(adcValue), (INT8U *) &adcValue);
+          so.signalSem(sCANControl);
+    }
+
+    if (adcValue == 0) {  // en el caso de que no hay personas, apagamos las luces
+          so.waitSem(sLCD);
+              hib.lcdClear();
+              hib.lcdSetCursorFirstLine();
+              hib.lcdPrint("Apagando luces");
+          so.signalSem(sLCD);
+    }
+  }
+}
+
 
 /*****************
   MAIN PROGRAM
@@ -497,14 +506,13 @@ void setup() {
 
 
 void loop() {
-  Serial.println("Placa 1: tareas de sensorización y actuación del ascensor");
+  Serial.println("Nodo1: cabina del ascensor");
   //el ascensor se encuentra en el piso 1 inicialmente
   hib.d7sPrintDigit((uint8_t) 1, hib.RIGHT_7SEG_DIS);
 
   // Definition and initialization of semaphores
   sCANControl = so.defSem(1); // intially accesible
   sLCD = so.defSem(1); // intially accesible
-  sPisoDest = so.defSem(1); // intially accesible
 
   // Definition and initialization of flags
   fExtEvent = so.defFlag();
@@ -512,6 +520,9 @@ void loop() {
   fIncendio = so.defFlag();
 
   so.setFlag(fActControl, maskPuertasCerradas);
+
+  // Definition and initialization of mailBoxes
+  mbIncendio = so.defMBox();
 
   // Definition and initialization of tasks
   so.defTask(TaskBascula, PRIO_TASK_ADC);
